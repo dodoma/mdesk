@@ -1,0 +1,7 @@
+*.o
+*.a
+cscope.*
+*~
+.depend
+sucker
+gmon.out

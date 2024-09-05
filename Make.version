@@ -1,0 +1,24 @@
+VERSION_MAJOR    = 0
+VERSION_MINOR    = 1
+PATCHLEVEL       = 0
+
+VERSION_MAJOR_HEX=$(shell printf '%02x\n' ${VERSION_MAJOR})
+VERSION_MINOR_HEX=$(shell printf '%02x\n' ${VERSION_MINOR})
+PATCHLEVEL_HEX=$(shell printf '%02x\n' ${PATCHLEVEL})
+MDESK_VERSION_HEX=0x$(VERSION_MAJOR_HEX)$(VERSION_MINOR_HEX)$(PATCHLEVEL_HEX)
+MDESK_VERSION_DEC=$(shell expr $(VERSION_MAJOR) \* 65536 + 0$(VERSION_MINOR) \* 256 + 0$(PATCHLEVEL))
+
+define generate_version
+	@(echo "#ifndef __MDESK_VERSION_H__" > $(1); \
+	echo "#define __MDESK_VERSION_H__" >> $(1); \
+	echo  >> $(1);\
+	echo "#define MDESK_VERSION         $(MDESK_VERSION_HEX)" >> $(1); \
+	echo "#define MDESK_VERSION_MAJOR   $(VERSION_MAJOR)" >> $(1); \
+	echo "#define MDESK_VERSION_MINOR   $(VERSION_MINOR)" >> $(1); \
+	echo "#define MDESK_PATCHLEVEL      $(PATCHLEVEL)" >> $(1); \
+	echo >> $(1); \
+	echo "#define MDESK_VERSION_DECIMAL $(MDESK_VERSION_DEC)" >> $(1); \
+	echo "#define MDESK_VERSION_STRING  \"$(VERSION_MAJOR).$(VERSION_MINOR).$(PATCHLEVEL)\"" >> $(1); \
+	echo >> $(1); \
+	echo "#endif /* __MDESK_VERSION_H__ */" >> $(1);)
+endef

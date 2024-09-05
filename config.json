@@ -1,0 +1,14 @@
+{
+    "location": "/home/pi/mdesk/",
+    "trace": {
+        "tostdout": true,
+        "main": "debug",
+    },
+    "server": {
+        "daemon": false,
+        "port": 3001,           // tcp websocket socket
+        "port_ssl": 3002,       // ssl tcp websocket
+        "broadcast_src": 3101,  // udp broadcast source port
+        "broadcast_dst": 3102,  // udp broadcast destnation port
+    }
+}
