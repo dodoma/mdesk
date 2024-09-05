@@ -21,11 +21,11 @@ static void _sig_exit(int sig)
 
 static bool _broadcast_me(void *data)
 {
-    NetNode *node = (NetNode*)data;
+    NetHornNode *nitem = (NetHornNode*)data;
 
     mtc_mt_dbg("on broadcast timeout");
 
-    if (g_ctime > node->pong && g_ctime - node->pong > HEARBEAT_TIMEOUT) {
+    if (g_ctime > nitem->pong && g_ctime - nitem->pong > HEARBEAT_TIMEOUT) {
         /* 长时间没收到客户端心跳了，广播自己 */
         struct sockaddr_in dest;
         int destlen = sizeof(struct sockaddr_in);
@@ -42,7 +42,7 @@ static bool _broadcast_me(void *data)
 
         MSG_DUMP_MT("SEND: ", sendbuf, sendlen);
 
-        int rv = sendto(node->fd_horn, sendbuf, sendlen, 0, (struct sockaddr*)&dest, destlen);
+        int rv = sendto(nitem->base.fd, sendbuf, sendlen, 0, (struct sockaddr*)&dest, destlen);
         if (rv != sendlen) mtc_mt_err("send failue %d %d", sendlen, rv);
     }
 
@@ -80,14 +80,17 @@ static void _timer_handler(int fd)
 
 MERR* netExposeME()
 {
+    int fd, rv;
+    struct epoll_event ev;
+
     signal(SIGTERM, _sig_exit);
     signal(SIGINT,  _sig_exit);
 
-    NetNode *node = mos_calloc(1, sizeof(NetNode));
-    node->pong = g_ctime;
+    g_efd = epoll_create1(0);
+    if (g_efd < 0) return merr_raise(MERR_ASSERT, "epoll create failure");
 
     /* timer fd */
-    int fd = timerfd_create(CLOCK_REALTIME, 0);
+    fd = timerfd_create(CLOCK_REALTIME, 0);
     if (fd == -1) return merr_raise(MERR_ASSERT, "timer fd create failure");
 
     struct timespec now;
@@ -100,7 +103,13 @@ MERR* netExposeME()
     if (timerfd_settime(fd, TFD_TIMER_ABSTIME, &new_value, NULL) == -1)
         return merr_raise(MERR_ASSERT, "timer set time");
 
-    node->fd_timer = fd;
+    NetNode *nitem = mos_calloc(1, sizeof(NetNode));
+    nitem->fd = fd;
+    nitem->type = NET_TIMER;
+    ev.events = EPOLLIN;
+    ev.data.ptr = nitem;
+    rv = epoll_ctl(g_efd, EPOLL_CTL_ADD, nitem->fd, &ev);
+    if(rv == -1) return merr_raise(MERR_ASSERT, "add fd failure");
 
     /* fd_horn */
     fd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -115,10 +124,19 @@ MERR* netExposeME()
     srvsa.sin_family = AF_INET;
     srvsa.sin_port = htons(mdf_get_int_value(g_config, "server.broadcast_src", 3101));
     srvsa.sin_addr.s_addr = INADDR_ANY;
-    int rv = bind(fd, (const struct sockaddr*)&srvsa, sizeof(srvsa));
+    rv = bind(fd, (const struct sockaddr*)&srvsa, sizeof(srvsa));
     if (rv != 0) return merr_raise(MERR_ASSERT, "bind broadcast failure");
 
-    node->fd_horn = fd;
+    NetHornNode *nodehorn = mos_calloc(1, sizeof(NetHornNode));
+    nodehorn->base.fd = fd;
+    nodehorn->base.type = NET_HORN;
+    nodehorn->pong = g_ctime;
+    ev.events = EPOLLIN | EPOLLET;
+    ev.data.ptr = nodehorn;
+    rv = epoll_ctl(g_efd, EPOLL_CTL_ADD, nodehorn->base.fd, &ev);
+    if(rv == -1) return merr_raise(MERR_ASSERT, "add fd failure");
+
+    g_timers = timerAdd(g_timers, 3, nodehorn, _broadcast_me);
 
     /* fd */
     fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -136,7 +154,13 @@ MERR* netExposeME()
     rv = listen(fd, 1024);
     if (rv < 0) return merr_raise(MERR_ASSERT, "listen failure");
 
-    node->fd = fd;
+    nitem = mos_calloc(1, sizeof(NetNode));
+    nitem->fd = fd;
+    nitem->type = NET_STREAM;
+    ev.events = EPOLLIN | EPOLLET;
+    ev.data.ptr = nitem;
+    rv = epoll_ctl(g_efd, EPOLL_CTL_ADD, nitem->fd, &ev);
+    if(rv == -1) return merr_raise(MERR_ASSERT, "add fd failure");
 
     /* fd_ssl */
     fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -154,77 +178,71 @@ MERR* netExposeME()
     rv = listen(fd, 1024);
     if (rv < 0) return merr_raise(MERR_ASSERT, "listen ssl failure");
 
-    node->fd_ssl = fd;
-
-    /* timer */
-    g_timers = timerAdd(g_timers, 3, node, _broadcast_me);
-
-    /* epoll */
-    int efd = epoll_create1(0);
-    if (efd < 0) return merr_raise(MERR_ASSERT, "epoll create failure");
-
-    struct epoll_event ev;
+    nitem = mos_calloc(1, sizeof(NetNode));
+    nitem->fd = fd;
+    nitem->type = NET_STREAM_SSL;
     ev.events = EPOLLIN | EPOLLET;
-
-    ev.data.fd = node->fd;
-    rv = epoll_ctl(efd, EPOLL_CTL_ADD, node->fd, &ev);
+    ev.data.ptr = nitem;
+    rv = epoll_ctl(g_efd, EPOLL_CTL_ADD, nitem->fd, &ev);
     if(rv == -1) return merr_raise(MERR_ASSERT, "add fd failure");
 
-    ev.data.fd = node->fd_ssl;
-    rv = epoll_ctl(efd, EPOLL_CTL_ADD, node->fd_ssl, &ev);
-    if(rv == -1) return merr_raise(MERR_ASSERT, "add fd ssl failure");
-
-    ev.data.fd = node->fd_horn;
-    rv = epoll_ctl(efd, EPOLL_CTL_ADD, node->fd_horn, &ev);
-    if(rv == -1) return merr_raise(MERR_ASSERT, "add fd horn failure");
-
-    ev.events = EPOLLIN;
-    ev.data.fd = node->fd_timer;
-    rv = epoll_ctl(efd, EPOLL_CTL_ADD, node->fd_timer, &ev);
-    if(rv == -1) return merr_raise(MERR_ASSERT, "add fd timer failure");
-
+    /* epoll */
     struct epoll_event *events = mos_calloc(MAXEVENTS, sizeof(struct epoll_event));
 
     dad_call_me_back = false;
     while (!dad_call_me_back) {
-        int nfd = epoll_wait(efd, events, MAXEVENTS, 2000);
+        int nfd = epoll_wait(g_efd, events, MAXEVENTS, 2000);
         if (nfd == -1 && errno != EINTR) {
             mtc_mt_err("epoll wait error %s", strerror(errno));
             break;
         }
         for (int i = 0; i < nfd; i++) {
-            fd = events[i].data.fd;
-            if (fd == node->fd) {
-                ;
-            } else if (fd == node->fd_ssl) {
-                ;
-            } else if (fd == node->fd_horn) {
-                ;
-            } else if (fd == node->fd_timer) {
-                _timer_handler(node->fd_timer);
-            } else {
-                ;
+            nitem = events[i].data.ptr;
+
+            if (events[i].events & (EPOLLERR | EPOLLHUP)) {
+                if (nitem->type == NET_CLIENT || nitem->type == NET_CLIENT_SSL) {
+                    mtc_mt_warn("client error %d", nitem->fd);
+
+                    netNodeFree(nitem);
+                    continue;
+                } else {
+                    mtc_mt_err("system socket error! %d", nitem->fd);
+
+                    netNodeFree(nitem);
+
+                    return merr_raise(MERR_ASSERT, "system socket error %d", nitem->fd);
+                }
+            }
+
+            switch (nitem->type) {
+            case NET_TIMER:
+                _timer_handler(nitem->fd);
+                break;
+            default:
+                break;
             }
         }
     }
 
-    epoll_ctl(efd, EPOLL_CTL_DEL, node->fd, NULL);
-    epoll_ctl(efd, EPOLL_CTL_DEL, node->fd_ssl, NULL);
-    epoll_ctl(efd, EPOLL_CTL_DEL, node->fd_horn, NULL);
-    epoll_ctl(efd, EPOLL_CTL_DEL, node->fd_timer, NULL);
-
-    shutdown(node->fd, SHUT_RDWR);
-    shutdown(node->fd_ssl, SHUT_RDWR);
-    shutdown(node->fd_horn, SHUT_RDWR);
-    shutdown(node->fd_timer, SHUT_RDWR);
-
-    close(node->fd);
-    close(node->fd_ssl);
-    close(node->fd_horn);
-    close(node->fd_timer);
+    /* TODO nitem memory leak */
 
     mos_free(events);
-    close(efd);
+    close(g_efd);
 
     return MERR_OK;
+}
+
+void netNodeFree(NetNode *node)
+{
+    if (!node) return;
+
+    switch (node->type) {
+    default:
+        break;
+    }
+
+    epoll_ctl(g_efd, EPOLL_CTL_DEL, node->fd, NULL);
+    close(node->fd);
+
+    mos_free(node);
 }

@@ -13,5 +13,6 @@ extern time_t g_elapsed;
 extern char *g_location;
 extern bool  g_log_tostdout;
 extern const char *g_cpuid;
+extern int g_efd;
 
 #endif  /* __GLOBAL_H__ */

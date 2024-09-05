@@ -16,6 +16,7 @@ time_t g_elapsed = 0;
 char *g_location = NULL;
 bool  g_log_tostdout = false;
 const char *g_cpuid = NULL;
+int g_efd = 0;
 
 int main(int argc, char *argv[])
 {

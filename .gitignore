@@ -5,3 +5,4 @@ cscope.*
 .depend
 sucker
 gmon.out
+tmp/

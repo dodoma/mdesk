@@ -6,6 +6,7 @@ TimerEntry* timerAdd(TimerEntry *entry, int timeout, void *data, bool (*callback
 {
     TimerEntry *e = mos_calloc(1, sizeof(TimerEntry));
     e->timeout = timeout;
+    e->pause = false;
     e->data = data;
     e->callback = callback;
     e->next = entry;
