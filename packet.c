@@ -3,6 +3,30 @@
 #include "packet.h"
 #include "global.h"
 
+size_t packetPINGFill(uint8_t *buf, size_t buflen)
+{
+    if (!buf || buflen < LEN_IDIOT) return 0;
+
+    memset(buf, 0x0, buflen);
+
+    *buf = PACKET_SOF; buf++;
+    *buf = IDIOT_PING; buf++;
+
+    return LEN_IDIOT;
+}
+
+size_t packetPONGFill(uint8_t *buf, size_t buflen)
+{
+    if (!buf || buflen < LEN_IDIOT) return 0;
+
+    memset(buf, 0x0, buflen);
+
+    *buf = PACKET_SOF; buf++;
+    *buf = IDIOT_PONG; buf++;
+
+    return LEN_IDIOT;
+}
+
 CommandPacket* packetCommandFill(uint8_t *buf, size_t buflen)
 {
     static uint16_t seqnum = 0xEA;
@@ -13,8 +37,8 @@ CommandPacket* packetCommandFill(uint8_t *buf, size_t buflen)
     if (seqnum > 0xFFFA) seqnum = 0;
 
     CommandPacket *packet = (CommandPacket*)buf;
-    packet->sof = 0xAB;
-    packet->version = 1;
+    packet->sof = PACKET_SOF;
+    packet->idiot = 1;
     packet->seqnum = seqnum & 0xFFFF;
 
     seqnum++;
@@ -22,11 +46,12 @@ CommandPacket* packetCommandFill(uint8_t *buf, size_t buflen)
     return packet;
 }
 
-size_t packetBroadcastFill(CommandPacket *packet)
+size_t packetBroadcastFill(CommandPacket *packet,
+                           const char *cpuid, uint16_t port_contrl, uint16_t port_binary)
 {
-    if (!packet) return 0;
+    if (!packet || !cpuid) return 0;
 
-    int idlen = strlen(g_cpuid);
+    int idlen = strlen(cpuid);
     uint8_t *bufhead = (uint8_t*)packet;
 
     packet->frame_type = FRAME_TYPE_MSG;
@@ -34,10 +59,12 @@ size_t packetBroadcastFill(CommandPacket *packet)
     packet->cmd_id = CMD_BROADCAST;
 
     uint8_t *buf = packet->data;
-    memcpy(buf, g_cpuid, idlen);
+    memcpy(buf, cpuid, idlen);
     buf += idlen;
     *buf = 0x0; buf++;
-    /* TODO ip, model */
+
+    *(uint16_t*)buf = port_contrl; buf += 2;
+    *(uint16_t*)buf = port_binary; buf += 2;
 
     size_t packetlen = buf - bufhead + 4;
     packet->length = packetlen;
@@ -60,4 +87,30 @@ bool packetCRCFill(CommandPacket *packet)
     *buf = (crc >> 24) & 0xFF; buf++;
 
     return true;
+}
+
+IdiotPacket* packetIdiotGot(uint8_t *buf, size_t len)
+{
+    if (!buf || len < LEN_IDIOT) return NULL;
+
+    IdiotPacket *packet = (IdiotPacket*)buf;
+
+    if (packet->sof != PACKET_SOF) return NULL;
+    if (packet->idiot < IDIOT_PING) return NULL;
+
+    return packet;
+}
+
+CommandPacket* packetCommandGot(uint8_t *buf, ssize_t len)
+{
+    if (!buf || len < sizeof(CommandPacket)) return NULL;
+
+    CommandPacket *packet = (CommandPacket*)buf;
+
+    if (packet->sof != PACKET_SOF) return NULL;
+    if (packet->idiot != 1) return NULL;
+    if (packet->length != len) return NULL;
+    /* TODO crc valid */
+
+    return packet;
 }

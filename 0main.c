@@ -2,6 +2,7 @@
 
 #include "rpi.h"
 #include "net.h"
+#include "client.h"
 #include "timer.h"
 
 #define DEFAULT_CONFIGFILE "/home/pi/mdesk/config.json"
@@ -53,6 +54,8 @@ int main(int argc, char *argv[])
     g_cpuid = rpiReadID();
 
     signal(SIGPIPE, SIG_IGN);
+
+    clientInit();
 
     err = netExposeME();
     RETURN_V_NOK(err, 1);

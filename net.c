@@ -4,13 +4,17 @@
 #include <sys/timerfd.h>
 
 #include "net.h"
+#include "client.h"
 #include "global.h"
 #include "packet.h"
 
 #define MAXEVENTS 512
-#define HEARBEAT_TIMEOUT 10
+#define HEARTBEAT_PERIOD 5
+#define HEARTBEAT_TIMEOUT 15
 
 static bool dad_call_me_back = false;
+
+static NetHornNode *m_horn = NULL;
 
 static void _sig_exit(int sig)
 {
@@ -25,7 +29,7 @@ static bool _broadcast_me(void *data)
 
     mtc_mt_dbg("on broadcast timeout");
 
-    if (g_ctime > nitem->pong && g_ctime - nitem->pong > HEARBEAT_TIMEOUT) {
+    if (g_ctime > nitem->ping && g_ctime - nitem->ping > HEARTBEAT_TIMEOUT) {
         /* 长时间没收到客户端心跳了，广播自己 */
         struct sockaddr_in dest;
         int destlen = sizeof(struct sockaddr_in);
@@ -33,11 +37,13 @@ static bool _broadcast_me(void *data)
         size_t sendlen = 0;
 
         dest.sin_family = AF_INET;
-        dest.sin_port = htons(mdf_get_int_value(g_config, "server.broadcast_dst", 3102));
+        dest.sin_port = htons(mdf_get_int_value(g_config, "server.broadcast_dst", 4102));
         dest.sin_addr.s_addr = INADDR_BROADCAST;
 
         CommandPacket *packet = packetCommandFill(sendbuf, sizeof(sendbuf));
-        sendlen = packetBroadcastFill(packet);
+        sendlen = packetBroadcastFill(packet, g_cpuid,
+                                      mdf_get_int_value(g_config, "server.port_contrl", 4001),
+                                      mdf_get_int_value(g_config, "server.port_binary", 4002));
         packetCRCFill(packet);
 
         MSG_DUMP_MT("SEND: ", sendbuf, sendlen);
@@ -56,6 +62,8 @@ static void _timer_handler(int fd)
 
     time_t now = time(NULL);
     if (now <= g_ctime) return;
+
+    //mtc_mt_dbg("tick tock");
 
     g_ctime = now;
     g_elapsed = now - g_starton;
@@ -76,6 +84,40 @@ static void _timer_handler(int fd)
 
         t = n;
     }
+}
+
+static int _new_connection(int efd, int sfd, NetNodeType type)
+{
+    struct sockaddr_in clisa;
+    socklen_t clilen = sizeof(struct sockaddr_in);
+
+    NetClientNode *nitem = mos_calloc(1, sizeof(NetClientNode));
+    nitem->base.type = type;
+    nitem->base.fd = accept(sfd, (struct sockaddr*)&clisa, &clilen);
+    if(nitem->base.fd == -1) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            mos_free(nitem);
+            return 0;
+        } else return -1;
+    }
+
+    if (fcntl(nitem->base.fd, F_SETFL, fcntl(nitem->base.fd, F_GETFL, 0) | O_NONBLOCK) != 0) {
+        close(nitem->base.fd);
+        mos_free(nitem);
+        return 0;
+    }
+
+    mtc_mt_dbg("new connection on %d %d ==> %d", type, sfd, nitem->base.fd);
+
+    nitem->buf = NULL;
+    nitem->dropped = false;
+    nitem->complete = false;
+
+    struct epoll_event ev = {.data.ptr = nitem, .events = EPOLLIN | EPOLLET};
+    if (epoll_ctl(efd, EPOLL_CTL_ADD, nitem->base.fd, &ev) == -1)
+        mtc_mt_err("epoll add failure %s", strerror(errno));
+
+    return 1;
 }
 
 MERR* netExposeME()
@@ -122,7 +164,7 @@ MERR* netExposeME()
 
     struct sockaddr_in srvsa;
     srvsa.sin_family = AF_INET;
-    srvsa.sin_port = htons(mdf_get_int_value(g_config, "server.broadcast_src", 3101));
+    srvsa.sin_port = htons(mdf_get_int_value(g_config, "server.broadcast_src", 4101));
     srvsa.sin_addr.s_addr = INADDR_ANY;
     rv = bind(fd, (const struct sockaddr*)&srvsa, sizeof(srvsa));
     if (rv != 0) return merr_raise(MERR_ASSERT, "bind broadcast failure");
@@ -130,57 +172,58 @@ MERR* netExposeME()
     NetHornNode *nodehorn = mos_calloc(1, sizeof(NetHornNode));
     nodehorn->base.fd = fd;
     nodehorn->base.type = NET_HORN;
-    nodehorn->pong = g_ctime;
-    ev.events = EPOLLIN | EPOLLET;
-    ev.data.ptr = nodehorn;
-    rv = epoll_ctl(g_efd, EPOLL_CTL_ADD, nodehorn->base.fd, &ev);
-    if(rv == -1) return merr_raise(MERR_ASSERT, "add fd failure");
+    nodehorn->ping = 0;
+    //ev.events = EPOLLIN | EPOLLET;
+    //ev.data.ptr = nodehorn;
+    //rv = epoll_ctl(g_efd, EPOLL_CTL_ADD, nodehorn->base.fd, &ev);
+    //if(rv == -1) return merr_raise(MERR_ASSERT, "add fd failure");
 
-    g_timers = timerAdd(g_timers, 3, nodehorn, _broadcast_me);
+    g_timers = timerAdd(g_timers, HEARTBEAT_PERIOD, nodehorn, _broadcast_me);
+    m_horn = nodehorn;
 
-    /* fd */
+    /* fd contrl */
     fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return merr_raise(MERR_ASSERT, "create socket failure");
+    if (fd < 0) return merr_raise(MERR_ASSERT, "create contrl socket failure");
 
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable));
     fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
 
     srvsa.sin_family = AF_INET;
-    srvsa.sin_port = htons(mdf_get_int_value(g_config, "server.port", 3001));
+    srvsa.sin_port = htons(mdf_get_int_value(g_config, "server.port_contrl", 4001));
     srvsa.sin_addr.s_addr = INADDR_ANY;
     rv = bind(fd, (const struct sockaddr*)&srvsa, sizeof(srvsa));
-    if (rv != 0) return merr_raise(MERR_ASSERT, "bind failure");
+    if (rv != 0) return merr_raise(MERR_ASSERT, "bind contrl failure");
 
     rv = listen(fd, 1024);
-    if (rv < 0) return merr_raise(MERR_ASSERT, "listen failure");
+    if (rv < 0) return merr_raise(MERR_ASSERT, "listen contrl failure");
 
     nitem = mos_calloc(1, sizeof(NetNode));
     nitem->fd = fd;
-    nitem->type = NET_STREAM;
+    nitem->type = NET_CONTRL;
     ev.events = EPOLLIN | EPOLLET;
     ev.data.ptr = nitem;
     rv = epoll_ctl(g_efd, EPOLL_CTL_ADD, nitem->fd, &ev);
     if(rv == -1) return merr_raise(MERR_ASSERT, "add fd failure");
 
-    /* fd_ssl */
+    /* fd binary */
     fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return merr_raise(MERR_ASSERT, "create ssl socket failure");
+    if (fd < 0) return merr_raise(MERR_ASSERT, "create binary socket failure");
 
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable));
     fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
 
     srvsa.sin_family = AF_INET;
-    srvsa.sin_port = htons(mdf_get_int_value(g_config, "server.port_ssl", 3002));
+    srvsa.sin_port = htons(mdf_get_int_value(g_config, "server.port_binary", 4002));
     srvsa.sin_addr.s_addr = INADDR_ANY;
     rv = bind(fd, (const struct sockaddr*)&srvsa, sizeof(srvsa));
-    if (rv != 0) return merr_raise(MERR_ASSERT, "bind ssl failure");
+    if (rv != 0) return merr_raise(MERR_ASSERT, "bind binary failure");
 
     rv = listen(fd, 1024);
-    if (rv < 0) return merr_raise(MERR_ASSERT, "listen ssl failure");
+    if (rv < 0) return merr_raise(MERR_ASSERT, "listen binary failure");
 
     nitem = mos_calloc(1, sizeof(NetNode));
     nitem->fd = fd;
-    nitem->type = NET_STREAM_SSL;
+    nitem->type = NET_BINARY;
     ev.events = EPOLLIN | EPOLLET;
     ev.data.ptr = nitem;
     rv = epoll_ctl(g_efd, EPOLL_CTL_ADD, nitem->fd, &ev);
@@ -200,7 +243,7 @@ MERR* netExposeME()
             nitem = events[i].data.ptr;
 
             if (events[i].events & (EPOLLERR | EPOLLHUP)) {
-                if (nitem->type == NET_CLIENT || nitem->type == NET_CLIENT_SSL) {
+                if (nitem->type == NET_CLIENT_CONTRL || nitem->type == NET_CLIENT_BINARY) {
                     mtc_mt_warn("client error %d", nitem->fd);
 
                     netNodeFree(nitem);
@@ -210,13 +253,40 @@ MERR* netExposeME()
 
                     netNodeFree(nitem);
 
+                    /* TODO memory leak */
                     return merr_raise(MERR_ASSERT, "system socket error %d", nitem->fd);
                 }
             }
 
             switch (nitem->type) {
+            case NET_CONTRL:
+                while (true) {
+                    rv = _new_connection(g_efd, nitem->fd, NET_CLIENT_CONTRL);
+                    if (rv < 0) {
+                        return merr_raise(MERR_ASSERT, "new connection error %s", strerror(errno));
+                    } else if (rv == 0) break;
+                }
+                break;
+            case NET_BINARY:
+                while (true) {
+                    rv = _new_connection(g_efd, nitem->fd, NET_CLIENT_BINARY);
+                    if (rv < 0) {
+                        return merr_raise(MERR_ASSERT, "new connection error %s", strerror(errno));
+                    } else if (rv == 0) break;
+                }
+                break;
+            case NET_HORN:
+                //mtc_mt_dbg("receive broadcast response");
+                //((NetHornNode*)nitem)->ping = g_ctime;
+                break;
             case NET_TIMER:
                 _timer_handler(nitem->fd);
+                break;
+            case NET_CLIENT_CONTRL:
+                mtc_mt_dbg("client control");
+                clientRecv(nitem->fd, (NetClientNode*)nitem);
+                break;
+            case NET_CLIENT_BINARY:
                 break;
             default:
                 break;
@@ -245,4 +315,9 @@ void netNodeFree(NetNode *node)
     close(node->fd);
 
     mos_free(node);
+}
+
+void netHornPing()
+{
+    if (m_horn) m_horn->ping = g_ctime;
 }

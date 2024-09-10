@@ -1,13 +1,15 @@
 #ifndef __NET_H__
 #define __NET_H__
 
+#define CONTRL_PACKET_MAX_LEN 10485760
+
 typedef enum {
-    NET_STREAM = 0,
-    NET_STREAM_SSL,
+    NET_CONTRL = 0,
+    NET_BINARY,
     NET_HORN,
     NET_TIMER,
-    NET_CLIENT,
-    NET_CLIENT_SSL,
+    NET_CLIENT_CONTRL,
+    NET_CLIENT_BINARY,
 } NetNodeType;
 
 typedef struct {
@@ -18,14 +20,20 @@ typedef struct {
 typedef struct {
     NetNode base;
 
-    time_t pong;                /* last time when receive heartbeat packet */
+    time_t ping;                /* last time when receive ping packet */
 } NetHornNode;
 
 typedef struct {
     NetNode base;
+
+    uint8_t *buf;
+    bool dropped;
+    bool complete;
 } NetClientNode;
 
 MERR* netExposeME();
+
 void netNodeFree(NetNode *node);
+void netHornPing();
 
 #endif  /* __NET_H__ */
