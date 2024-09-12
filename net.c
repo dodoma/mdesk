@@ -73,7 +73,8 @@ static void _timer_handler(int fd)
     while (t && t->timeout > 0) {
         n = t->next;
 
-        if (g_elapsed % t->timeout == 0 && !t->pause) {
+        if (t->right_now || (g_elapsed % t->timeout == 0 && !t->pause)) {
+            t->right_now = false;
             if (!t->callback(t->data)) {
                 if (p) p->next = n;
                 if (t == g_timers) g_timers = n;
@@ -110,8 +111,9 @@ static int _new_connection(int efd, int sfd, NetNodeType type)
     mtc_mt_dbg("new connection on %d %d ==> %d", type, sfd, nitem->base.fd);
 
     nitem->buf = NULL;
+    nitem->recvlen = 0;
+    nitem->in_business = false;
     nitem->dropped = false;
-    nitem->complete = false;
 
     struct epoll_event ev = {.data.ptr = nitem, .events = EPOLLIN | EPOLLET};
     if (epoll_ctl(efd, EPOLL_CTL_ADD, nitem->base.fd, &ev) == -1)
@@ -178,7 +180,7 @@ MERR* netExposeME()
     //rv = epoll_ctl(g_efd, EPOLL_CTL_ADD, nodehorn->base.fd, &ev);
     //if(rv == -1) return merr_raise(MERR_ASSERT, "add fd failure");
 
-    g_timers = timerAdd(g_timers, HEARTBEAT_PERIOD, nodehorn, _broadcast_me);
+    g_timers = timerAdd(g_timers, HEARTBEAT_PERIOD, true, nodehorn, _broadcast_me);
     m_horn = nodehorn;
 
     /* fd contrl */
@@ -283,7 +285,6 @@ MERR* netExposeME()
                 _timer_handler(nitem->fd);
                 break;
             case NET_CLIENT_CONTRL:
-                mtc_mt_dbg("client control");
                 clientRecv(nitem->fd, (NetClientNode*)nitem);
                 break;
             case NET_CLIENT_BINARY:

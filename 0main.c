@@ -4,6 +4,7 @@
 #include "net.h"
 #include "client.h"
 #include "timer.h"
+#include "bee.h"
 
 #define DEFAULT_CONFIGFILE "/home/pi/mdesk/config.json"
 
@@ -57,8 +58,13 @@ int main(int argc, char *argv[])
 
     clientInit();
 
+    err = beeStart();
+    RETURN_V_NOK(err, 1);
+
     err = netExposeME();
     RETURN_V_NOK(err, 1);
+
+    beeStop();
 
     mdf_destroy(&g_config);
 

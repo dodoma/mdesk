@@ -39,6 +39,7 @@ CommandPacket* packetCommandFill(uint8_t *buf, size_t buflen)
     CommandPacket *packet = (CommandPacket*)buf;
     packet->sof = PACKET_SOF;
     packet->idiot = 1;
+    packet->length = buflen;    /* 临时存放，真正填包时用作长度判断 */
     packet->seqnum = seqnum & 0xFFFF;
 
     seqnum++;
@@ -51,14 +52,13 @@ size_t packetBroadcastFill(CommandPacket *packet,
 {
     if (!packet || !cpuid) return 0;
 
-    int idlen = strlen(cpuid);
     uint8_t *bufhead = (uint8_t*)packet;
 
-    packet->frame_type = FRAME_TYPE_MSG;
-    packet->cmd_set = CMDSET_GENERAL;
-    packet->cmd_id = CMD_BROADCAST;
+    packet->frame_type = FRAME_MSG;
+    packet->command = CMD_BROADCAST;
 
     uint8_t *buf = packet->data;
+    int idlen = strlen(cpuid);
     memcpy(buf, cpuid, idlen);
     buf += idlen;
     *buf = 0x0; buf++;

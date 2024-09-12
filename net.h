@@ -27,8 +27,10 @@ typedef struct {
     NetNode base;
 
     uint8_t *buf;
+    ssize_t recvlen;
+
+    bool in_business;
     bool dropped;
-    bool complete;
 } NetClientNode;
 
 MERR* netExposeME();
