@@ -56,6 +56,6 @@ QueueEntry* queueEntryCreate(uint16_t command, NetClientNode *client, MDF *datan
 void queueEntryFree(void *p);
 
 QueueEntry* queueEntryGet(QueueManager *queue);
-void queueEntryPut(QueueManager *queue, QueueEntry *qe);
+void queueEntryPush(QueueManager *queue, QueueEntry *qe);
 
 #endif  /* ___BEE_H__ */

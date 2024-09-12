@@ -39,9 +39,9 @@ static bool _parse_packet(NetClientNode *client, CommandPacket *packet)
         }
 
         pthread_mutex_lock(&be->op_queue->lock);
-        queueEntryPut(be->op_queue, qe);
-        pthread_mutex_unlock(&be->op_queue->lock);
+        queueEntryPush(be->op_queue, qe);
         pthread_cond_signal(&be->op_queue->cond);
+        pthread_mutex_unlock(&be->op_queue->lock);
 
         client->in_business = true;
 
@@ -95,7 +95,7 @@ static bool _parse_recv(NetClientNode *client, uint8_t *recvbuf, size_t recvlen)
         }
     } else {
         /* command packet ? */
-        if (recvlen < LEN_PREAMBLE) PARTLY_PACKET;
+        if (recvlen < LEN_HEADER + 1 + 4) PARTLY_PACKET;
 
         CommandPacket *packet = (CommandPacket*)recvbuf;
         if (packet->sof == PACKET_SOF && packet->idiot == 1) {

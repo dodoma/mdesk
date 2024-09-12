@@ -14,3 +14,13 @@ libpocket 端需要对网络 clientDrop梳理，断网上报及callback，重连
 
 
 手机端与 WAN 下 moc server 的逻辑最后再做。
+
+
+### [四 2024-09-12 10:20:57]
+
+mdesk的收包逻辑及 bee 框架已经完成，
+下一步
+
+1. 完成 libpocket 的收包及重连逻辑
+2. 对接完成 cmd_set_wifi 及 Users, Channels
+3. Android 连调

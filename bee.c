@@ -64,7 +64,7 @@ static void* _worker(void *arg)
         }
 
         /* rv == 0 */
-        QueueEntry *qentry = (QueueEntry*)queueEntryGet(queue);
+        QueueEntry *qentry = queueEntryGet(queue);
         pthread_mutex_unlock(&queue->lock);
 
         if (!qentry) {
@@ -193,13 +193,17 @@ void queueEntryFree(void *p)
     mos_free(entry);
 }
 
+/*
+ * 因为QueueEntry是单向链表，对于O(1)操作只能要么取top、要么取bottom，此处用Get笼统表示
+ * 配合先入先出原则，此处取 bottom
+ */
 QueueEntry* queueEntryGet(QueueManager *queue)
 {
     if (!queue || !queue->bottom || queue->size < 1) return NULL;
 
-    QueueEntry *entry = queue->top;
+    QueueEntry *entry = queue->bottom;
 
-    queue->top = entry->next;
+    queue->bottom = entry->next;
 
     if (queue->size == 1) {
         queue->top = NULL;      /* redundancy */
@@ -211,11 +215,12 @@ QueueEntry* queueEntryGet(QueueManager *queue)
     return entry;
 }
 
-void queueEntryPut(QueueManager *queue, QueueEntry *entry)
+void queueEntryPush(QueueManager *queue, QueueEntry *entry)
 {
     if (!queue || !entry) return;
 
-    entry->next = queue->top;
+    //entry->next = queue->top; /* 方便后入先出 */
+    queue->top->next = entry; /* 方便先入先出 */
 
     queue->top = entry;
 
