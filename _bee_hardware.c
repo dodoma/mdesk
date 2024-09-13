@@ -8,6 +8,21 @@ bool hdw_process(BeeEntry *be, QueueEntry *qe)
 
     mtc_mt_dbg("process command %d", qe->command);
 
+    switch (qe->command) {
+    case CMD_WIFI_SET:
+        mtc_mt_dbg("set wifi ... %s", mdf_get_value(qe->nodein, "name", "unknownName"));
+        /* TODO business logic */
+        CommandPacket *packet = packetCommandFill(qe->client->bufsend, LEN_PACKET_NORMAL);
+        size_t sendlen = packetACKFill(packet, qe->seqnum, qe->command, true, NULL);
+        packetCRCFill(packet);
+
+        SSEND(qe->client->base.fd, qe->client->bufsend, sendlen);
+
+        break;
+    default:
+        break;
+    }
+
     return true;
 }
 

@@ -1,6 +1,7 @@
 #include <reef.h>
 
 #include "packet.h"
+#include "net.h"
 #include "global.h"
 
 size_t packetPINGFill(uint8_t *buf, size_t buflen)
@@ -67,6 +68,49 @@ size_t packetBroadcastFill(CommandPacket *packet,
     *(uint16_t*)buf = port_binary; buf += 2;
 
     size_t packetlen = buf - bufhead + 4;
+    packet->length = packetlen;
+
+    return packetlen;
+}
+
+size_t packetACKFill(CommandPacket *packet, uint16_t seqnum, uint16_t command,
+                     bool success, const char *errmsg)
+{
+    if (!packet || (errmsg && strlen(errmsg) > LEN_PACKET_NORMAL - LEN_HEADER - 4)) return 0;
+
+    uint8_t *bufhead = (uint8_t*)packet;
+
+    packet->seqnum = seqnum & 0xFFFF;
+    packet->frame_type = FRAME_ACK;
+    packet->command = command;
+
+    uint8_t *buf = packet->data;
+    *buf = success; buf++;
+
+    if (errmsg) {
+        int msglen = strlen(errmsg);
+        memcpy(buf, errmsg, msglen);
+        buf += msglen;
+        *buf = 0x0; buf++;
+    }
+
+    size_t packetlen = buf - bufhead + 4;
+    packet->length = packetlen;
+
+    return packetlen;
+}
+
+size_t packetDataFill(CommandPacket *packet, FRAME_TYPE type, uint16_t command, MDF *datanode)
+{
+    if (!packet || !datanode) return 0;
+
+    packet->frame_type = type;
+    packet->command = command;
+
+    size_t mpacklen = mdf_mpack_serialize(datanode, packet->data, packet->length - LEN_HEADER);
+    if (mpacklen == 0) return 0;
+
+    size_t packetlen = mpacklen + LEN_HEADER + 4;
     packet->length = packetlen;
 
     return packetlen;

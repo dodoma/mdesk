@@ -8,6 +8,7 @@
  */
 
 typedef struct queue_entry {
+    uint16_t seqnum;
     uint16_t command;
     NetClientNode *client;
     MDF *nodein;
@@ -52,7 +53,7 @@ BeeEntry* beeFind(uint8_t id);
 QueueManager* queueCreate();
 void queueFree(QueueManager *queue);
 
-QueueEntry* queueEntryCreate(uint16_t command, NetClientNode *client, MDF *datanode);
+QueueEntry* queueEntryCreate(uint16_t seqnum, uint16_t command, NetClientNode *client, MDF *datanode);
 void queueEntryFree(void *p);
 
 QueueEntry* queueEntryGet(QueueManager *queue);

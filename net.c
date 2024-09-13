@@ -322,3 +322,31 @@ void netHornPing()
 {
     if (m_horn) m_horn->ping = g_ctime;
 }
+
+bool SSEND(int fd, uint8_t *buf, size_t len)
+{
+    ssize_t count = 0;
+    int rv;
+
+    if (fd <= 0 || !buf || len <= 0) return false;
+
+    while (count < len) {
+        rv = send(fd, buf + count, len - count, MSG_NOSIGNAL);
+        MSG_DUMP_MT("SEND: ", buf + count, rv);
+
+        if (rv == -1) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+                continue;
+            else {
+                mtc_mt_err("send failure %s", strerror(errno));
+                return false;
+            }
+        } else if (rv == 0) {
+            return false;
+        } else {
+            count += rv;
+        }
+    }
+
+    return true;
+}

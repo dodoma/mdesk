@@ -169,11 +169,12 @@ void queueFree(QueueManager *queue)
     mos_free(queue);
 }
 
-QueueEntry* queueEntryCreate(uint16_t command, NetClientNode *client, MDF *datanode)
+QueueEntry* queueEntryCreate(uint16_t seqnum, uint16_t command, NetClientNode *client, MDF *datanode)
 {
     if (!client) return NULL;
 
     QueueEntry *entry = mos_calloc(1, sizeof(QueueEntry));
+    entry->seqnum = seqnum;
     entry->command = command;
     entry->client = client;
     entry->nodein = datanode;
@@ -220,7 +221,7 @@ void queueEntryPush(QueueManager *queue, QueueEntry *entry)
     if (!queue || !entry) return;
 
     //entry->next = queue->top; /* 方便后入先出 */
-    queue->top->next = entry; /* 方便先入先出 */
+    if (queue->top) queue->top->next = entry; /* 方便先入先出 */
 
     queue->top = entry;
 

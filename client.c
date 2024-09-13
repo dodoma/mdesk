@@ -31,7 +31,7 @@ static bool _parse_packet(NetClientNode *client, CommandPacket *packet)
             return false;
         }
 
-        QueueEntry *qe = queueEntryCreate(packet->command, client, datanode);
+        QueueEntry *qe = queueEntryCreate(packet->seqnum, packet->command, client, datanode);
         if (!qe) {
             mtc_mt_warn("queue entry create failure");
             mdf_destroy(&datanode);
@@ -73,11 +73,12 @@ static bool _parse_recv(NetClientNode *client, uint8_t *recvbuf, size_t recvlen)
     if (ipacket) {
         switch (ipacket->idiot) {
         case IDIOT_PING:
-            mtc_mt_dbg("ping received");
+            //mtc_mt_dbg("ping received");
             netHornPing();
             uint8_t sendbuf[256] = {0};
             size_t sendlen = packetPONGFill(sendbuf, sizeof(sendbuf));
             send(client->base.fd, sendbuf, sendlen, MSG_NOSIGNAL);
+            //MSG_DUMP_MT("SEND: ", sendbuf, sendlen);
             break;
         case IDIOT_PONG:
             break;

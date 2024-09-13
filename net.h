@@ -1,6 +1,7 @@
 #ifndef __NET_H__
 #define __NET_H__
 
+#define LEN_PACKET_NORMAL 512
 #define CONTRL_PACKET_MAX_LEN 10485760
 
 typedef enum {
@@ -26,8 +27,9 @@ typedef struct {
 typedef struct {
     NetNode base;
 
-    uint8_t *buf;
+    uint8_t *buf;               /* receive buffer */
     ssize_t recvlen;
+    uint8_t bufsend[LEN_PACKET_NORMAL];
 
     bool in_business;
     bool dropped;
@@ -37,5 +39,7 @@ MERR* netExposeME();
 
 void netNodeFree(NetNode *node);
 void netHornPing();
+
+bool SSEND(int fd, uint8_t *buf, size_t len);
 
 #endif  /* __NET_H__ */
