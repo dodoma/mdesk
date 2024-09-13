@@ -30,12 +30,12 @@ size_t packetPONGFill(uint8_t *buf, size_t buflen)
 
 CommandPacket* packetCommandFill(uint8_t *buf, size_t buflen)
 {
-    static uint16_t seqnum = 0xEA;
+    static uint16_t seqnum = SEQ_USER_START; /* 0 ~ 1024 的 seqnum 被系统固定回调占用 */
 
     if (!buf || buflen < sizeof(CommandPacket)) return NULL;
 
     memset(buf, 0x0, buflen);
-    if (seqnum > 0xFFFA) seqnum = 0;
+    if (seqnum > 0xFFFA) seqnum = SEQ_USER_START;
 
     CommandPacket *packet = (CommandPacket*)buf;
     packet->sof = PACKET_SOF;

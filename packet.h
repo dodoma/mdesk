@@ -26,6 +26,13 @@ typedef enum {
     CMD_WIFI_SET = 0,
 } COMMAND_HDARDWAR;
 
+typedef enum {
+    SEQ_RESERVE = 0,
+    SEQ_SERVER_CLOSED,
+    SEQ_CONNECTION_LOST,
+    SEQ_USER_START = 0x401,
+} SYS_CALLBACK_SEQ;
+
 #pragma pack(1)
 typedef struct {
     uint8_t sof;

@@ -288,6 +288,7 @@ MERR* netExposeME()
                 clientRecv(nitem->fd, (NetClientNode*)nitem);
                 break;
             case NET_CLIENT_BINARY:
+                //clientRecv(nitem->fd, (NetClientNode*)nitem);
                 break;
             default:
                 break;

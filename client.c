@@ -82,6 +82,9 @@ static bool _parse_recv(NetClientNode *client, uint8_t *recvbuf, size_t recvlen)
             break;
         case IDIOT_PONG:
             break;
+        default:
+            mtc_mt_warn("unsupport idot packet %d", ipacket->idiot);
+            break;
         }
 
         if (recvlen > LEN_IDIOT) {
@@ -159,6 +162,8 @@ bool clientRecv(int sfd, NetClientNode *client)
                 }
             } else if (rv == 0) {
                 /* peer performded orderly shutdown */
+
+                /* 如果用户发完包马上 close 掉自己，是处理不到他发包内容的 */
                 mtc_mt_dbg("%d closed", sfd);
                 clientDrop(client);
                 return false;
@@ -181,7 +186,7 @@ bool clientRecv(int sfd, NetClientNode *client)
         ssize_t prev_length = client->recvlen;
         while (true) {
             rv = recv(sfd, client->buf + client->recvlen, CONTRL_PACKET_MAX_LEN - client->recvlen, 0);
-            MSG_DUMP_MT("RECV: ", client->buf + client->recvlen, rv);
+            MSG_DUMP_MT("CRECV: ", client->buf + client->recvlen, rv);
 
             if (rv == -1) {
                 if (errno == EAGAIN || errno == EWOULDBLOCK) {

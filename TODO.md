@@ -22,5 +22,6 @@ mdesk的收包逻辑及 bee 框架已经完成，
 下一步
 
 1. 完成 libpocket 的收包及重连逻辑
+1. 测试断包和粘包
 2. 对接完成 cmd_set_wifi 及 Users, Channels
 3. Android 连调
