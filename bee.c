@@ -9,6 +9,17 @@
 
 MLIST *g_bees = NULL;
 
+static void _user_destroy(void *p)
+{
+    if (!p) return;
+
+    NetClientNode *client = (NetClientNode*)p;
+
+    mtc_mt_dbg("free client %p", client);
+    mos_free(client->buf);
+    mos_free(client);
+}
+
 static void _bee_stop(void *p)
 {
     if (!p) return;
@@ -21,14 +32,14 @@ static void _bee_stop(void *p)
     mos_free(be->op_thread);
     queueFree(be->op_queue);
 
-    //mhash_destroy(&be->users);
-    //mhash_destroy(&be->channels);
+    mlist_destroy(&be->users);
 
     mos_free(be);
 }
 
 static void* _worker(void *arg)
 {
+    uint8_t idle_count = 0;
     int rv;
 
     BeeEntry *be = (BeeEntry*)arg;
@@ -49,6 +60,21 @@ static void* _worker(void *arg)
         while ((rv = pthread_cond_timedwait(&queue->cond, &queue->lock, &timeout)) == ETIMEDOUT) {
             //mtc_mt_dbg("condwait timeout");
             timeout.tv_sec += 1;
+
+            if (++idle_count >= 3) {
+                mtc_mt_noise("check my users in freetime");
+
+                idle_count = 0;
+
+                NetClientNode *client;
+                MLIST_ITERATE(be->users, client) {
+                    if (client->dropped) {
+                        mlist_delete(be->users, _moon_i);
+                        _moon_i--;
+                    }
+                }
+            }
+
             if (!be->running) break;
         }
 
@@ -72,6 +98,13 @@ static void* _worker(void *arg)
             continue;
         }
 
+        idle_count = 0;
+
+        if (!qentry->client->in_business) {
+            qentry->client->in_business = true;
+            mlist_append(be->users, qentry->client);
+        }
+
         be->process(be, qentry);
 
         queueEntryFree(qentry);
@@ -89,9 +122,7 @@ static BeeEntry* _start_driver(BeeDriver *driver)
     be->name = driver->name;
     be->running = true;
 
-    /* TODO user, channel */
-    //mhash_init(&be->userh, mhash_str_hash, mhash_str_comp, user_destroy);
-    //mhash_init(&be->channelh, mhash_str_hash, mhash_str_comp, channel_destroy);
+    mlist_init(&be->users, _user_destroy);
     be->op_queue = queueCreate();
     be->op_thread = mos_calloc(1, sizeof(pthread_t));
     pthread_create(be->op_thread, NULL, _worker, (void*)be);

@@ -43,8 +43,6 @@ static bool _parse_packet(NetClientNode *client, CommandPacket *packet)
         pthread_cond_signal(&be->op_queue->cond);
         pthread_mutex_unlock(&be->op_queue->lock);
 
-        client->in_business = true;
-
         break;
     default:
         mtc_mt_warn("unsupport frame %d", packet->frame_type);

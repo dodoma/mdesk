@@ -9,8 +9,8 @@
 #include "packet.h"
 
 #define MAXEVENTS 512
-#define HEARTBEAT_PERIOD 5
-#define HEARTBEAT_TIMEOUT 15
+#define BROADCAST_PERIOD 5
+#define BROADCAST_TIMEOUT 15
 
 static bool dad_call_me_back = false;
 
@@ -27,9 +27,9 @@ static bool _broadcast_me(void *data)
 {
     NetHornNode *nitem = (NetHornNode*)data;
 
-    mtc_mt_dbg("on broadcast timeout");
+    if (g_ctime > nitem->ping && g_ctime - nitem->ping > BROADCAST_TIMEOUT) {
+        mtc_mt_noise("broadcast me");
 
-    if (g_ctime > nitem->ping && g_ctime - nitem->ping > HEARTBEAT_TIMEOUT) {
         /* 长时间没收到客户端心跳了，广播自己 */
         struct sockaddr_in dest;
         int destlen = sizeof(struct sockaddr_in);
@@ -46,7 +46,7 @@ static bool _broadcast_me(void *data)
                                       mdf_get_int_value(g_config, "server.port_binary", 4002));
         packetCRCFill(packet);
 
-        MSG_DUMP_MT("SEND: ", sendbuf, sendlen);
+        //MSG_DUMP_MT("SEND: ", sendbuf, sendlen);
 
         int rv = sendto(nitem->base.fd, sendbuf, sendlen, 0, (struct sockaddr*)&dest, destlen);
         if (rv != sendlen) mtc_mt_err("send failue %d %d", sendlen, rv);
@@ -180,7 +180,7 @@ MERR* netExposeME()
     //rv = epoll_ctl(g_efd, EPOLL_CTL_ADD, nodehorn->base.fd, &ev);
     //if(rv == -1) return merr_raise(MERR_ASSERT, "add fd failure");
 
-    g_timers = timerAdd(g_timers, HEARTBEAT_PERIOD, true, nodehorn, _broadcast_me);
+    g_timers = timerAdd(g_timers, BROADCAST_PERIOD, true, nodehorn, _broadcast_me);
     m_horn = nodehorn;
 
     /* fd contrl */

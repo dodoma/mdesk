@@ -33,8 +33,7 @@ typedef struct bee_entry {
     QueueManager *op_queue;
     pthread_t *op_thread;
 
-    MHASH *users;
-    MHASH *channels;
+    MLIST *users;
 
     bool (*process)(struct bee_entry *e, QueueEntry *qe);
     void (*stop)(struct bee_entry *e);
