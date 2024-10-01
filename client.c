@@ -10,7 +10,7 @@
 
 static uint8_t *m_recvbuf = NULL;
 
-static bool _parse_packet(NetClientNode *client, CommandPacket *packet)
+static bool _parse_packet(NetClientNode *client, MessagePacket *packet)
 {
     mtc_mt_dbg("parse packet %d %d", packet->frame_type, packet->command);
 
@@ -99,7 +99,7 @@ static bool _parse_recv(NetClientNode *client, uint8_t *recvbuf, size_t recvlen)
         /* command packet ? */
         if (recvlen < LEN_HEADER + 1 + 4) PARTLY_PACKET;
 
-        CommandPacket *packet = (CommandPacket*)recvbuf;
+        MessagePacket *packet = (MessagePacket*)recvbuf;
         if (packet->sof == PACKET_SOF && packet->idiot == 1) {
             if (recvlen < packet->length) {
                 if (packet->length > CONTRL_PACKET_MAX_LEN) {

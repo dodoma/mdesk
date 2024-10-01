@@ -4,5 +4,7 @@ cscope.*
 *~
 .depend
 sucker
+test
+test.c
 gmon.out
 tmp/

@@ -6,6 +6,7 @@
 #include "bee.h"
 
 #include "_bee_hardware.c"
+#include "_bee_audio.c"
 
 MLIST *g_bees = NULL;
 
@@ -57,7 +58,8 @@ static void* _worker(void *arg)
 
         pthread_mutex_lock(&queue->lock);
 
-        while ((rv = pthread_cond_timedwait(&queue->cond, &queue->lock, &timeout)) == ETIMEDOUT) {
+        while (queue->size == 0 &&
+               (rv = pthread_cond_timedwait(&queue->cond, &queue->lock, &timeout)) == ETIMEDOUT) {
             //mtc_mt_dbg("condwait timeout");
             timeout.tv_sec += 1;
 
@@ -83,7 +85,7 @@ static void* _worker(void *arg)
             break;
         }
 
-        if (rv != 0) {
+        if (queue->size == 0 && rv != 0) {
             mtc_mt_err("timedwait error %s", strerror(errno));
             pthread_mutex_unlock(&queue->lock);
             continue;
@@ -149,6 +151,9 @@ MERR* beeStart()
 
     mlist_append(g_bees, be);
 
+    be = _start_driver(&audio_driver);
+    if (!be) return merr_raise(MERR_ASSERT, "播放器启动失败");
+
     mlist_sort(g_bees, _bee_compare);
 
     return MERR_OK;
@@ -209,6 +214,7 @@ QueueEntry* queueEntryCreate(uint16_t seqnum, uint16_t command, NetClientNode *c
     entry->command = command;
     entry->client = client;
     entry->nodein = datanode;
+    mdf_init(&entry->nodeout);
 
     entry->next = NULL;
 
@@ -222,6 +228,7 @@ void queueEntryFree(void *p)
     QueueEntry *entry = (QueueEntry*)p;
 
     mdf_destroy(&entry->nodein);
+    mdf_destroy(&entry->nodeout);
     mos_free(entry);
 }
 

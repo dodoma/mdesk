@@ -1,5 +1,6 @@
 {
     "location": "/home/pi/mdesk/",
+    "libraryRoot": "/home/pi/music/",
     "trace": {
         "tostdout": true,
         "main": "debug",

@@ -12,15 +12,17 @@ typedef enum {
 } IDIOT_INDICATOR;
 
 typedef enum {
-    FRAME_MSG = 0,         /* 硬解消息 */
-    FRAME_CMD,             /* 硬解命令 */
+    FRAME_CMD = 0,         /* 硬解命令 */
     FRAME_ACK,             /* 简短回包（command, success, errmsg?） */
     FRAME_HARDWARE,        /* 音源控制相关 */
+    FRAME_AUDIO,
+    FRAME_RESPONSE,        /* 完整回包（command, success, errmsg?, nodein at least with '{}') */
 } FRAME_TYPE;
 
 typedef enum {
     CMD_BROADCAST = 0,
-} COMMAND_MSG;
+    CMD_WHERE_AM_I,         /* 当前播放信息查询 */
+} COMMAND_CMD;
 
 typedef enum {
     CMD_WIFI_SET = 0,
@@ -49,21 +51,34 @@ typedef struct {
 
     uint16_t command;
     uint8_t data[1];
-} CommandPacket;
+} MessagePacket;
 #pragma pack()
 
 size_t packetPINGFill(uint8_t *buf, size_t buflen);
 size_t packetPONGFill(uint8_t *buf, size_t buflen);
 
-CommandPacket* packetCommandFill(uint8_t *buf, size_t buflen);
-size_t packetBroadcastFill(CommandPacket *packet,
+/*
+ * message packet 3 steps:
+ * 1. init
+ */
+MessagePacket* packetMessageInit(uint8_t *buf, size_t buflen);
+
+/*
+ * 2. content fill
+ */
+size_t packetBroadcastFill(MessagePacket *packet,
                            const char *cpuid, uint16_t port_contrl, uint16_t port_binary);
-size_t packetDataFill(CommandPacket *packet, FRAME_TYPE type, uint16_t cmd, MDF *datanode); /* -_-! */
-size_t packetACKFill(CommandPacket *packet, uint16_t seqnum, uint16_t command,
+size_t packetACKFill(MessagePacket *packet, uint16_t seqnum, uint16_t command,
                      bool success, const char *errmsg);
-bool packetCRCFill(CommandPacket *packet);
+size_t packetDataFill(MessagePacket *packet, FRAME_TYPE type, uint16_t cmd, MDF *datanode); /* -_-! */
+size_t packetNODataFill(MessagePacket *packet, FRAME_TYPE type, uint16_t command);
+
+/*
+ * 3. CRC fill
+ */
+bool packetCRCFill(MessagePacket *packet);
 
 IdiotPacket* packetIdiotGot(uint8_t *buf, size_t len);
-CommandPacket* packetCommandGot(uint8_t *buf, ssize_t len);
+MessagePacket* packetMessageGot(uint8_t *buf, ssize_t len);
 
 #endif  /* __PACKET_H__ */

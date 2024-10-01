@@ -40,7 +40,7 @@ static bool _broadcast_me(void *data)
         dest.sin_port = htons(mdf_get_int_value(g_config, "server.broadcast_dst", 4102));
         dest.sin_addr.s_addr = INADDR_BROADCAST;
 
-        CommandPacket *packet = packetCommandFill(sendbuf, sizeof(sendbuf));
+        MessagePacket *packet = packetMessageInit(sendbuf, sizeof(sendbuf));
         sendlen = packetBroadcastFill(packet, g_cpuid,
                                       mdf_get_int_value(g_config, "server.port_contrl", 4001),
                                       mdf_get_int_value(g_config, "server.port_binary", 4002));

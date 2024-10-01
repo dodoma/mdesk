@@ -4,7 +4,7 @@ typedef struct {
 
 bool hdw_process(BeeEntry *be, QueueEntry *qe)
 {
-    HardwareEntry *me = (HardwareEntry*)be;
+    //HardwareEntry *me = (HardwareEntry*)be;
 
     mtc_mt_dbg("process command %d", qe->command);
 
@@ -12,7 +12,7 @@ bool hdw_process(BeeEntry *be, QueueEntry *qe)
     case CMD_WIFI_SET:
         mtc_mt_dbg("set wifi ... %s", mdf_get_value(qe->nodein, "name", "unknownName"));
         /* TODO business logic */
-        CommandPacket *packet = packetCommandFill(qe->client->bufsend, LEN_PACKET_NORMAL);
+        MessagePacket *packet = packetMessageInit(qe->client->bufsend, LEN_PACKET_NORMAL);
         size_t sendlen = packetACKFill(packet, qe->seqnum, qe->command, true, NULL);
         packetCRCFill(packet);
 

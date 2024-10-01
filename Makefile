@@ -7,10 +7,11 @@ APP = sucker
 SOURCES = $(wildcard *.c)
 OBJECTS = $(SOURCES:.c=.o)
 
-INCS = $(INCBASE)
+INCS = $(INCBASE) -I ./deps/minimp3/
 LIBS = $(LIBBASE)
 
-LIBS += -lm
+INCS += -I/usr/include/alsa
+LIBS += -lm -lasound
 
 all: $(APP) version.h
 
@@ -26,6 +27,9 @@ include $(DEPEND)
 	$(CC) $(CFLAGS) $(INCS) -o $@ -c $<
 
 sucker: 0main.o rpi.o bee.o net.o client.o timer.o packet.o
+	$(CC) $(CFLAGS) $^ -o $@ $(LIBS)
+
+test: test.o
 	$(CC) $(CFLAGS) $^ -o $@ $(LIBS)
 
 clean:

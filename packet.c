@@ -28,16 +28,16 @@ size_t packetPONGFill(uint8_t *buf, size_t buflen)
     return LEN_IDIOT;
 }
 
-CommandPacket* packetCommandFill(uint8_t *buf, size_t buflen)
+MessagePacket* packetMessageInit(uint8_t *buf, size_t buflen)
 {
     static uint16_t seqnum = SEQ_USER_START; /* 0 ~ 1024 的 seqnum 被系统固定回调占用 */
 
-    if (!buf || buflen < sizeof(CommandPacket)) return NULL;
+    if (!buf || buflen < sizeof(MessagePacket)) return NULL;
 
     memset(buf, 0x0, buflen);
     if (seqnum > 0xFFFA) seqnum = SEQ_USER_START;
 
-    CommandPacket *packet = (CommandPacket*)buf;
+    MessagePacket *packet = (MessagePacket*)buf;
     packet->sof = PACKET_SOF;
     packet->idiot = 1;
     packet->length = buflen;    /* 临时存放，真正填包时用作长度判断 */
@@ -48,14 +48,14 @@ CommandPacket* packetCommandFill(uint8_t *buf, size_t buflen)
     return packet;
 }
 
-size_t packetBroadcastFill(CommandPacket *packet,
+size_t packetBroadcastFill(MessagePacket *packet,
                            const char *cpuid, uint16_t port_contrl, uint16_t port_binary)
 {
     if (!packet || !cpuid) return 0;
 
     uint8_t *bufhead = (uint8_t*)packet;
 
-    packet->frame_type = FRAME_MSG;
+    packet->frame_type = FRAME_CMD;
     packet->command = CMD_BROADCAST;
 
     uint8_t *buf = packet->data;
@@ -73,7 +73,7 @@ size_t packetBroadcastFill(CommandPacket *packet,
     return packetlen;
 }
 
-size_t packetACKFill(CommandPacket *packet, uint16_t seqnum, uint16_t command,
+size_t packetACKFill(MessagePacket *packet, uint16_t seqnum, uint16_t command,
                      bool success, const char *errmsg)
 {
     if (!packet || (errmsg && strlen(errmsg) > LEN_PACKET_NORMAL - LEN_HEADER - 4)) return 0;
@@ -100,7 +100,7 @@ size_t packetACKFill(CommandPacket *packet, uint16_t seqnum, uint16_t command,
     return packetlen;
 }
 
-size_t packetDataFill(CommandPacket *packet, FRAME_TYPE type, uint16_t command, MDF *datanode)
+size_t packetDataFill(MessagePacket *packet, FRAME_TYPE type, uint16_t command, MDF *datanode)
 {
     if (!packet || !datanode) return 0;
 
@@ -116,7 +116,7 @@ size_t packetDataFill(CommandPacket *packet, FRAME_TYPE type, uint16_t command, 
     return packetlen;
 }
 
-bool packetCRCFill(CommandPacket *packet)
+bool packetCRCFill(MessagePacket *packet)
 {
     if (!packet || packet->length < 4) return false;
 
@@ -145,11 +145,11 @@ IdiotPacket* packetIdiotGot(uint8_t *buf, size_t len)
     return packet;
 }
 
-CommandPacket* packetCommandGot(uint8_t *buf, ssize_t len)
+MessagePacket* packetMessageGot(uint8_t *buf, ssize_t len)
 {
-    if (!buf || len < sizeof(CommandPacket)) return NULL;
+    if (!buf || len < sizeof(MessagePacket)) return NULL;
 
-    CommandPacket *packet = (CommandPacket*)buf;
+    MessagePacket *packet = (MessagePacket*)buf;
 
     if (packet->sof != PACKET_SOF) return NULL;
     if (packet->idiot != 1) return NULL;
@@ -157,4 +157,16 @@ CommandPacket* packetCommandGot(uint8_t *buf, ssize_t len)
     /* TODO crc valid */
 
     return packet;
+}
+
+size_t packetNODataFill(MessagePacket *packet, FRAME_TYPE type, uint16_t command)
+{
+    if (!packet) return 0;
+
+    packet->frame_type = type;
+    packet->command = command;
+
+    packet->length = LEN_HEADER + 4;
+
+    return packet->length;
 }

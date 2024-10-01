@@ -1,3 +1,6 @@
 [submodule "deps/reef"]
 	path = deps/reef
 	url = git@codea:reef.git
+[submodule "deps/minimp3"]
+	path = deps/minimp3
+	url = git@codea:minimp3

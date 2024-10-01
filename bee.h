@@ -12,6 +12,7 @@ typedef struct queue_entry {
     uint16_t command;
     NetClientNode *client;
     MDF *nodein;
+    MDF *nodeout;
 
     struct queue_entry *next;
 } QueueEntry;
