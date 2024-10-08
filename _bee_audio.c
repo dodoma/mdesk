@@ -3,6 +3,8 @@
 #define MINIMP3_ALLOW_MONO_STEREO_TRANSITION
 #include "minimp3_ex.h"
 
+#define LEN_DOMMEID 11
+
 typedef enum {
     ACT_NONE = 0,
     ACT_PLAY,
@@ -11,23 +13,18 @@ typedef enum {
     ACT_NEXT,
     ACT_PREV,
     ACT_DRAG,
+    ACT_RELOAD,
 } PLAY_ACTION;
 
 typedef struct {
-    char *id;
-    uint8_t sn;
+    char id[LEN_DOMMEID];
 
-    char *dir;
-    char *name;
+    char *dir;                  /* directory part of filename */
+    char *name;                 /* name part of filename */
 
-    char title[128];
-    char artist[128];
-    char album[128];
-    char year[32];
-    char track[8];
+    char *title;
 
-    /* bitrate 可能是 CBR or VBR，动态比特率不方便记录 */
-    //uint32_t samplerate;        /* 441000 44.1 kHZ */
+    uint8_t  sn;
     size_t   filesize;
     uint32_t duration;            /* in seconds */
 
@@ -35,7 +32,8 @@ typedef struct {
 } DommeFile;
 
 typedef struct {
-    char *name;
+    char *title;
+    char *year;
     MLIST *tracks;
     uint32_t pos;               /* 当前播放曲目 */
 } DommeAlbum;
@@ -116,6 +114,8 @@ typedef struct {
     AudioTrack *track;
 } AudioEntry;
 
+#include "_audio_init.c"
+
 static char* _action_string(PLAY_ACTION act)
 {
     switch (act) {
@@ -126,6 +126,7 @@ static char* _action_string(PLAY_ACTION act)
     case ACT_NEXT: return "下一首";
     case ACT_PREV: return "上一首";
     case ACT_DRAG: return "拖动";
+    case ACT_RELOAD: return "更新索引";
     default: return "瞎搞";
     }
 }
@@ -191,35 +192,6 @@ DommeFile* dommeGetPos(DommeStore *plan, uint32_t pos)
     return NULL;
 }
 
-DommeArtist* artistFind(MLIST *artists, char *name)
-{
-    DommeArtist *artist;
-    MLIST_ITERATE(artists, artist) {
-        /* TODO 艺术家可能有包含关系，srv, srv & double trouble... */
-        if (!strcmp(artist->name, name)) return artist;
-    }
-
-    return NULL;
-}
-
-void artistFree(void *p)
-{
-    DommeArtist *artist = (DommeArtist*)p;
-
-    mlist_destroy(&artist->albums);
-    mos_free(artist);
-}
-
-DommeAlbum* albumFind(MLIST *albums, char *title)
-{
-    DommeAlbum *disk;
-    MLIST_ITERATE(albums, disk) {
-        if (!strcmp(disk->name, title)) return disk;
-    }
-
-    return NULL;
-}
-
 uint32_t albumFreeCount(DommeAlbum *disk)
 {
     if (!disk) return 0;
@@ -246,79 +218,6 @@ uint32_t artistFreeCount(DommeArtist *artist)
     }
 
     return freecount;
-}
-
-void dommeFileFree(void *key, void *val)
-{
-    DommeFile *mfile = (DommeFile*)val;
-
-    mos_free(mfile->id);
-    mos_free(mfile->name);
-    mos_free(mfile);
-}
-
-void dommeStoreFree(void *p)
-{
-    DommeStore *plan = (DommeStore*)p;
-
-    mos_free(plan->name);
-    mos_free(plan->basedir);
-
-    mlist_destroy(&plan->dirs);
-    mhash_destroy(&plan->mfiles);
-    mlist_destroy(&plan->artists);
-
-    mos_free(plan);
-}
-
-MERR* dommeStoresLoad(MLIST *plans)
-{
-    MERR *err;
-
-    mlist_clear(plans);
-
-    MDF *config;
-    mdf_init(&config);
-
-    char *libroot = mdf_get_value(g_config, "libraryRoot", NULL);
-    if (!libroot) return merr_raise(MERR_ASSERT, "library root path not found");
-    //size_t slen = strlen(libroot);
-    //if (slen == 0 || libroot[slen-1] != '/') mdf_append_string_value(g_config, "libraryRoot", "/");
-
-    err = mdf_json_import_filef(config, "%s/config.json", libroot);
-    if (err) return merr_pass(err);
-
-    MDF *cnode = mdf_node_child(config);
-    while (cnode) {
-        char *name = mdf_get_value_copy(cnode, "name", NULL);
-        char *path = mdf_get_value_copy(cnode, "path", NULL);
-        if (name && path) {
-            DommeStore *plan = mos_calloc(1, sizeof(DommeStore));
-
-            char fullpath[PATH_MAX-64] = {0};
-            snprintf(fullpath, sizeof(fullpath), "%s/%s/", libroot, path);
-            plan->name = strdup(name);
-            plan->basedir = strdup(fullpath);
-            plan->moren = mdf_get_bool_value(cnode, "default", false);
-            plan->count_album = 0;
-            plan->count_track = 0;
-            plan->count_touched = 0;
-
-            mlist_init(&plan->dirs, free);
-            mhash_init(&plan->mfiles, mhash_str_hash, mhash_str_comp, dommeFileFree);
-            mlist_init(&plan->artists, artistFree);
-
-            char filename[PATH_MAX] = {0};
-            snprintf(filename, sizeof(filename), "%smp3.db", fullpath);
-            /* TODO dommeRestoreFromFile() */
-        }
-
-        cnode = mdf_node_next(cnode);
-    }
-
-    mdf_destroy(&config);
-
-    return MERR_OK;
 }
 
 DommeStore* dommeStoreDefault(MLIST *plans)
@@ -897,12 +796,12 @@ BeeEntry* _start_audio()
     snd_mixer_selem_register(mixer_handle, NULL, NULL);
     snd_mixer_load(mixer_handle);
 
-    snd_mixer_selem_id_t *sid;
-    snd_mixer_selem_id_alloca(&sid);
-    snd_mixer_selem_id_set_index(sid, 0);
-    snd_mixer_selem_id_set_name(sid, "Headphone");
-
-    me->mixer = snd_mixer_find_selem(mixer_handle, sid);
+    //snd_mixer_selem_id_t *sid;
+    //snd_mixer_selem_id_alloca(&sid);
+    //snd_mixer_selem_id_set_index(sid, 0);
+    //snd_mixer_selem_id_set_name(sid, "Master");
+    //me->mixer = snd_mixer_find_selem(mixer_handle, sid);
+    me->mixer = snd_mixer_first_elem(mixer_handle);
     if (!me->mixer) {
         mtc_mt_err("Can't find mixer.");
         return NULL;
@@ -919,7 +818,6 @@ BeeEntry* _start_audio()
 
     return (BeeEntry*)me;
 }
-
 
 BeeDriver audio_driver = {
     .id = FRAME_AUDIO,
