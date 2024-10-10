@@ -30,11 +30,14 @@ int main(int argc, char *argv[])
     err = mdf_json_import_file(g_config, filename);
     DIE_NOK(err);
 
+    mdf_makesure_endwithc(g_config, "location", '/');
+    mdf_makesure_endwithc(g_config, "libraryRoot", '/');
+
     g_location = mdf_get_value(g_config, "location", "./");
     g_log_tostdout = mdf_get_bool_value(g_config, "trace.tostdout", false);
     int loglevel = mtc_level_str2int(mdf_get_value(g_config, "trace.main", "debug"));
 
-    err = mtc_mt_initf("main", loglevel, g_log_tostdout ? "-" : "%s/log/moc.log", g_location);
+    err = mtc_mt_initf("main", loglevel, g_log_tostdout ? "-" : "%slog/moc.log", g_location);
     DIE_NOK(err);
 
     if (mdf_get_bool_value(g_config, "server.daemon", false)) {

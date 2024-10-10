@@ -1,9 +1,12 @@
+#include <dirent.h>
+#include <iconv.h>
 #include <alsa/asoundlib.h>
 #define MINIMP3_IMPLEMENTATION
 #define MINIMP3_ALLOW_MONO_STEREO_TRANSITION
 #include "minimp3_ex.h"
 
 #define LEN_DOMMEID 11
+#define LEN_ID3_STRING 128
 
 typedef enum {
     ACT_NONE = 0,
@@ -13,23 +16,8 @@ typedef enum {
     ACT_NEXT,
     ACT_PREV,
     ACT_DRAG,
-    ACT_RELOAD,
+    ACT_STOP,
 } PLAY_ACTION;
-
-typedef struct {
-    char id[LEN_DOMMEID];
-
-    char *dir;                  /* directory part of filename */
-    char *name;                 /* name part of filename */
-
-    char *title;
-
-    uint8_t  sn;
-    size_t   filesize;
-    uint32_t duration;            /* in seconds */
-
-    bool touched;
-} DommeFile;
 
 typedef struct {
     char *title;
@@ -44,6 +32,24 @@ typedef struct {
     uint32_t count_track;
     uint32_t pos;               /* 当前播放专辑 */
 } DommeArtist;
+
+typedef struct {
+    char id[LEN_DOMMEID];
+
+    char *dir;                  /* directory part of filename */
+    char *name;                 /* name part of filename */
+
+    char *title;
+
+    uint8_t  sn;
+    size_t   filesize;
+    uint32_t duration;            /* in seconds */
+
+    DommeAlbum  *disk;
+    DommeArtist *artist;
+
+    bool touched;
+} DommeFile;
 
 typedef struct {
     char *name;
@@ -91,12 +97,16 @@ typedef struct {
     pthread_cond_t cond;
     bool running;
 
+    pthread_t indexer;
+
     snd_pcm_t *pcm;
     snd_mixer_elem_t *mixer;
     bool pcm_param_seted;
 
     MLIST *plans;               /* 所有媒体库列表 */
     DommeStore *plan;           /* 当前使用的媒体库 */
+
+    MLIST *planb;               /* 索引使用的媒体库列表 */
 
     char *trackid;              /* 设置播放曲目 */
     char *album;                /* 设置播放专辑 */
@@ -114,7 +124,9 @@ typedef struct {
     AudioTrack *track;
 } AudioEntry;
 
+#include "_mp3.c"
 #include "_audio_init.c"
+#include "_audio_indexer.c"
 
 static char* _action_string(PLAY_ACTION act)
 {
@@ -126,7 +138,7 @@ static char* _action_string(PLAY_ACTION act)
     case ACT_NEXT: return "下一首";
     case ACT_PREV: return "上一首";
     case ACT_DRAG: return "拖动";
-    case ACT_RELOAD: return "更新索引";
+    case ACT_STOP: return "停止播放";
     default: return "瞎搞";
     }
 }
@@ -230,6 +242,18 @@ DommeStore* dommeStoreDefault(MLIST *plans)
     }
 
     return plan;
+}
+
+DommeStore* dommeStoreFind(MLIST *plans, char *name)
+{
+    if (!plans || !name) return NULL;
+
+    DommeStore *plan;
+    MLIST_ITERATE(plans, plan) {
+        if (!strcmp(plan->name, name)) return plan;
+    }
+
+    return NULL;
 }
 
 /* 用户指明了播放范围 */
@@ -596,12 +620,12 @@ static void* _player(void *arg)
     int rv;
 
     int loglevel = mtc_level_str2int(mdf_get_value(g_config, "trace.worker", "debug"));
-    mtc_mt_initf("player", loglevel, g_log_tostdout ? "-"  :"%s/log/%s.log", g_location, "player");
+    mtc_mt_initf("player", loglevel, g_log_tostdout ? "-"  :"%slog/%s.log", g_location, "player");
 
     mtc_mt_dbg("I am audio player");
 
     char filename[PATH_MAX];
-    snprintf(filename, sizeof(filename), "%s/connect.mp3", g_location);
+    snprintf(filename, sizeof(filename), "%sconnect.mp3", g_location);
     _play_raw(me, filename);
 
     while (me->running) {
@@ -674,6 +698,13 @@ static void* _player(void *arg)
                 _play(me);
             } else mtc_mt_warn("nothing to resume");
             break;
+        case ACT_STOP:
+            track->id = NULL;
+            me->trackid = NULL;
+            me->album = NULL;
+            me->artist = NULL;
+            me->act = ACT_NONE;
+            continue;           /* 静待下一次动作信号 */
         default:
             break;
         }
@@ -714,6 +745,12 @@ bool audio_process(BeeEntry *be, QueueEntry *qe)
     mtc_mt_dbg("process command %d", qe->command);
 
     switch (qe->command) {
+    case CMD_STORE_SWITCH:
+        me->act = ACT_STOP;
+        /* TODO wait _play() ? */
+        char *name = mdf_get_value(qe->nodein, "name", NULL);
+        if (name) me->plan = dommeStoreFind(me->plans, name);
+        break;
     case CMD_WHERE_AM_I:
         if (track->id) {
             mdf_set_value(qe->nodeout, "trackid", track->id);
@@ -747,19 +784,27 @@ void audio_stop(BeeEntry *be)
     pthread_cancel(me->worker);
     pthread_join(me->worker, NULL);
 
+    pthread_cancel(me->indexer);
+    pthread_join(me->indexer, NULL);
+
     mos_free(me->track);
     mlist_destroy(&me->plans);
+    mlist_destroy(&me->planb);
     mlist_destroy(&me->playlist);
 }
 
 BeeEntry* _start_audio()
 {
+    MERR *err;
+
     AudioEntry *me = mos_calloc(1, sizeof(AudioEntry));
     me->base.process = audio_process;
     me->base.stop = audio_stop;
 
     mlist_init(&me->plans, dommeStoreFree);
-    MERR *err = dommeStoresLoad(me->plans);
+    mlist_init(&me->planb, dommeStoreFree);
+
+    err = dommeStoresLoad(me->plans);
     RETURN_V_NOK(err, NULL);
 
     me->trackid = NULL;
@@ -815,6 +860,8 @@ BeeEntry* _start_audio()
     pthread_cond_init(&me->cond, NULL);
 
     pthread_create(&me->worker, NULL, _player, me);
+
+    pthread_create(&me->indexer, NULL, dommeIndexerStart, me);
 
     return (BeeEntry*)me;
 }

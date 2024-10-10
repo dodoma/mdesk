@@ -1,3 +1,44 @@
+static int _dir_compare(const void *a, void *key)
+{
+    MDF *node = (MDF*)a;
+
+    char *val = mdf_get_value(node, "dir", NULL);
+    if (val && !strcmp(val, (char*)key)) return 0;
+
+    return 1;
+}
+
+static int _album_compare(const void *a, void *key)
+{
+    MDF *node = (MDF*)a;
+    DommeFile *mfile = (DommeFile*)key;
+
+    char *sa = mdf_get_value(node, "a", NULL);
+    char *sb = mdf_get_value(node, "b", NULL);
+
+    if (sa && sb) {
+        /* 专辑名首先要一样 */
+        if (mfile->disk && !strcmp(sb, mfile->disk->title)) {
+            /* 作者一样，或者有包含关系，都算同一张专辑 */
+            if (mfile->artist && !strcmp(sa, mfile->artist->name)) return 0;
+            else if (mfile->artist &&
+                     (strstr(sa, mfile->artist->name) || strstr(mfile->artist->name, sa))) return 0;
+        }
+    }
+
+    return 1;
+}
+
+static int _plan_compare(const void *a, const void *b)
+{
+    DommeStore *pa, *pb;
+
+    pa = *(DommeStore**)a;
+    pb = *(DommeStore**)b;
+
+    return strcmp(pa->name, pb->name);
+}
+
 static int _strcompare(const void *a, const void *b)
 {
     char *sa, *sb;
@@ -139,6 +180,7 @@ MERR* dommeLoadFromFile(char *filename, DommeStore *plan)
 
     err = mdf_mpack_import_file(dbnode, filename);
     if (err) return merr_pass(err);
+    MDF_TRACE_MT(dbnode);
 
     MDF *cnode = mdf_node_child(dbnode);
     while (cnode) {
@@ -178,21 +220,24 @@ MERR* dommeLoadFromFile(char *filename, DommeStore *plan)
                 if (mdf_child_count(song, NULL) != 6) continue;
 
                 char *id = mdf_get_value(song, "[0]", NULL);
-                char *name = mdf_get_value_copy(song, "[1]", NULL);
-                char *title = mdf_get_value_copy(song, "[2]", NULL);
+                char *name = mdf_get_value(song, "[1]", NULL);
+                char *title = mdf_get_value(song, "[2]", NULL);
 
                 mtc_mt_noise("restore music %s%s with id %s", dir, name, id);
 
                 mfile = mos_calloc(1, sizeof(DommeFile));
                 snprintf(mfile->id, sizeof(mfile->id), id);
                 mfile->dir = dir;
-                mfile->name = name;
-                mfile->title = title;
+                mfile->name = strdup(name);
+                mfile->title = strdup(title);
 
                 mfile->sn = mdf_get_int_value(song, "[3]", 0);
                 mfile->filesize = mdf_get_uint32_value(song, "[4]", 0);
                 mfile->duration = mdf_get_uint32_value(song, "[5]", 0);
                 mfile->touched = false;
+
+                mfile->artist = artist;
+                mfile->disk = disk;
 
                 mhash_insert(plan->mfiles, mfile->id, mfile);
                 plan->count_track++;
@@ -248,27 +293,32 @@ MERR* dommeStoresLoad(MLIST *plans)
 
     char *libroot = mdf_get_value(g_config, "libraryRoot", NULL);
     if (!libroot) return merr_raise(MERR_ASSERT, "library root path not found");
-    //size_t slen = strlen(libroot);
-    //if (slen == 0 || libroot[slen-1] != '/') mdf_append_string_value(g_config, "libraryRoot", "/");
 
-    err = mdf_json_import_filef(config, "%s/config.json", libroot);
+    err = mdf_json_import_filef(config, "%sconfig.json", libroot);
     if (err) return merr_pass(err);
 
     MDF *cnode = mdf_node_child(config);
     while (cnode) {
-        char *name = mdf_get_value_copy(cnode, "name", NULL);
-        char *path = mdf_get_value_copy(cnode, "path", NULL);
+        mdf_makesure_endwithc(cnode, "path", '/');
+        char *name = mdf_get_value(cnode, "name", NULL);
+        char *path = mdf_get_value(cnode, "path", NULL);
         if (name && path) {
             DommeStore *plan = dommeStoreCreate();
 
             char fullpath[PATH_MAX-64] = {0};
-            snprintf(fullpath, sizeof(fullpath), "%s/%s/", libroot, path);
+            snprintf(fullpath, sizeof(fullpath), "%s%s", libroot, path);
             plan->name = strdup(name);
             plan->basedir = strdup(fullpath);
             plan->moren = mdf_get_bool_value(cnode, "default", false);
 
-            err = dommeLoadFromFilef(plan, "%smp3.db", plan->basedir);
-            TRACE_NOK_MT(err);
+            err = dommeLoadFromFilef(plan, "%smusic.db", plan->basedir);
+            if (err == MERR_OK) {
+                mlist_append(plans, plan);
+            } else {
+                dommeStoreFree(plan);
+                TRACE_NOK_MT(err);
+            }
+
         }
 
         cnode = mdf_node_next(cnode);
@@ -279,23 +329,115 @@ MERR* dommeStoresLoad(MLIST *plans)
     return MERR_OK;
 }
 
-void* _indexer(void *arg)
+bool dommeStoreDumpFile(DommeStore *plan, char *filename)
 {
-    MERR *err;
+    if (!plan || !plan->mfiles || !filename) return false;
 
-    char *libroot = mdf_get_value(g_config, "libraryRoot", NULL);
-    if (!libroot) return merr_raise(MERR_ASSERT, "library root path not found");
+    MDF *datanode;
+    mdf_init(&datanode);
 
-    MDF *config;
-    mdf_init(&config);
-    err = mdf_json_import_filef(config, "%s/config.json", libroot);
-    if (err) return merr_pass(err);
+    char *key;
+    DommeFile *mfile;
+    MHASH_ITERATE(plan->mfiles, key, mfile) {
+        MDF *cnode = mdf_search(datanode, mfile->dir, _dir_compare);
+        if (!cnode) {
+            cnode = mdf_insert_node(datanode, NULL, -1);
+            mdf_set_value(cnode, "dir", mfile->dir);
+        }
 
-    MDF *cnode = mdf_node_child(config);
-    while (cnode) {
+        MDF *fnode = mdf_get_or_create_node(cnode, "art");
+        MDF *tnode = mdf_search(fnode, mfile, _album_compare);
+        if (!tnode) {
+            tnode = mdf_insert_node(fnode, NULL, -1);
 
-        cnode = mdf_node_next(cnode);
+            mdf_set_value(tnode, "a", mfile->artist->name);
+            mdf_set_value(tnode, "b", mfile->disk->title);
+            mdf_set_value(tnode, "c", mfile->disk->year);
+        }
+
+        MDF *mnode = mdf_insert_node(tnode, "d", -1);
+        mdf_set_value(mnode, "0", mfile->id);
+        mdf_set_value(mnode, "1", mfile->name);
+        mdf_set_value(mnode, "2", mfile->title);
+        mdf_set_int_value(mnode, "3", mfile->sn);
+        mdf_set_int_value(mnode, "4", mfile->filesize);
+        mdf_set_int_value(mnode, "5", mfile->duration);
+
+        mdf_object_2_array(mnode, NULL);
+        mdf_object_2_array(tnode, "d");
+        mdf_object_2_array(cnode, "art");
     }
 
-    mdf_destroy(&config);
+    mdf_object_2_array(datanode, NULL);
+
+    mdf_mpack_export_file(datanode, filename);
+
+    mdf_destroy(&datanode);
+    return true;
+}
+
+bool dommeStoreDumpFilef(DommeStore *plan, char *fmt, ...)
+{
+    char filename[PATH_MAX];
+    va_list ap;
+
+    va_start(ap, fmt);
+    vsnprintf(filename, sizeof(filename), fmt, ap);
+    va_end(ap);
+
+    return dommeStoreDumpFile(plan, filename);
+}
+
+MERR* dommeStoreReload(AudioEntry *me, char *basedir, char *name)
+{
+    MERR_NOT_NULLC(me, name, basedir);
+
+    mtc_mt_dbg("reload store %s with dir %s", name, basedir);
+
+    me->act = ACT_STOP;
+
+    DommeStore *plan = dommeStoreCreate();
+    plan->name = strdup(name);
+    plan->basedir = strdup(basedir);
+    plan->moren = false;
+
+    MERR *err = dommeLoadFromFilef(plan, "%smusic.db", basedir);
+    if (err) return merr_pass(err);
+
+    if (me->plan && !strcmp(me->plan->name, name)) me->plan = plan;
+
+    DommeStore sample = {.name = name}, *key = &sample;
+    int index = mlist_index(me->plans, &key, _plan_compare);
+    if (index >= 0) {
+        DommeStore *olan = mlist_getx(me->plans, index);
+        plan->moren = olan->moren;
+
+        mlist_set(me->plans, index, plan);
+        dommeStoreFree(olan);
+    } else mlist_append(me->plans, plan);
+
+    return MERR_OK;
+}
+
+bool dommeStoreReplace(AudioEntry *me, DommeStore *plan)
+{
+    if (!me || !plan || !plan->name) return false;
+
+    mtc_mt_dbg("replace store %s", plan->name);
+
+    me->act = ACT_STOP;
+
+    if (me->plan && !strcmp(me->plan->name, plan->name)) me->plan = plan;
+
+    DommeStore sample = {.name = plan->name}, *key = &sample;
+    int index = mlist_index(me->plans, &key, _plan_compare);
+    if (index >= 0) {
+        DommeStore *olan = mlist_getx(me->plans, index);
+        plan->moren = olan->moren;
+
+        mlist_set(me->plans, index, plan);
+        dommeStoreFree(olan);
+    } else mlist_append(me->plans, plan);
+
+    return true;
 }

@@ -4,6 +4,7 @@
     "trace": {
         "tostdout": true,
         "main": "debug",
+        "audio": "debug",
     },
     "server": {
         "daemon": false,
