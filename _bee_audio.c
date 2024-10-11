@@ -236,7 +236,7 @@ DommeStore* dommeStoreDefault(MLIST *plans)
 {
     if (!plans) return NULL;
 
-    DommeStore *plan;
+    DommeStore *plan = NULL;
     MLIST_ITERATE(plans, plan) {
         if (plan->moren) return plan;
     }
@@ -759,10 +759,8 @@ bool audio_process(BeeEntry *be, QueueEntry *qe)
         } else mdf_set_int_value(qe->nodeout, "progress", 0);
 
         MessagePacket *packet = packetMessageInit(qe->client->bufsend, LEN_PACKET_NORMAL);
-        size_t sendlen = packetDataFill(packet, FRAME_RESPONSE, qe->command, qe->nodeout);
+        size_t sendlen = packetResponseFill(packet, qe->seqnum, qe->command, true, NULL, qe->nodeout);
         packetCRCFill(packet);
-
-        packet->seqnum = qe->seqnum;
 
         SSEND(qe->client->base.fd, qe->client->bufsend, sendlen);
 

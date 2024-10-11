@@ -12,26 +12,46 @@ static uint8_t *m_recvbuf = NULL;
 
 static bool _parse_packet(NetClientNode *client, MessagePacket *packet)
 {
+    BeeEntry *be;
+    QueueEntry *qe;
+
     mtc_mt_dbg("parse packet %d %d", packet->frame_type, packet->command);
 
-    switch (packet->frame_type) {
-    case FRAME_HARDWARE:
-        MDF *datanode;
-        mdf_init(&datanode);
+    MDF *datanode;
+    mdf_init(&datanode);
+    if (packet->frame_type > FRAME_RESPONSE && packet->length > LEN_HEADER + 4) {
         if (mdf_mpack_deserialize(datanode, packet->data, packet->length - LEN_HEADER - 4) <= 0) {
             mtc_mt_warn("message pack deserialize failure");
             mdf_destroy(&datanode);
             return false;
         }
+    }
 
-        BeeEntry *be = beeFind(FRAME_HARDWARE);
+    switch (packet->frame_type) {
+    case FRAME_AUDIO:
+        be = beeFind(FRAME_AUDIO);
         if (!be) {
-            mtc_mt_err("lookup backend %d failure", packet->frame_type);
+            mtc_mt_err("lookup backend %d failure", FRAME_AUDIO);
             mdf_destroy(&datanode);
             return false;
         }
 
-        QueueEntry *qe = queueEntryCreate(packet->seqnum, packet->command, client, datanode);
+        qe = queueEntryCreate(packet->seqnum, packet->command, client, datanode);
+        pthread_mutex_lock(&be->op_queue->lock);
+        queueEntryPush(be->op_queue, qe);
+        pthread_cond_signal(&be->op_queue->cond);
+        pthread_mutex_unlock(&be->op_queue->lock);
+
+        break;
+    case FRAME_HARDWARE:
+        be = beeFind(FRAME_HARDWARE);
+        if (!be) {
+            mtc_mt_err("lookup backend %d failure", FRAME_HARDWARE);
+            mdf_destroy(&datanode);
+            return false;
+        }
+
+        qe = queueEntryCreate(packet->seqnum, packet->command, client, datanode);
         if (!qe) {
             mtc_mt_warn("queue entry create failure");
             mdf_destroy(&datanode);
@@ -46,6 +66,7 @@ static bool _parse_packet(NetClientNode *client, MessagePacket *packet)
         break;
     default:
         mtc_mt_warn("unsupport frame %d", packet->frame_type);
+        mdf_destroy(&datanode);
         return false;
     }
 
@@ -97,7 +118,7 @@ static bool _parse_recv(NetClientNode *client, uint8_t *recvbuf, size_t recvlen)
         }
     } else {
         /* command packet ? */
-        if (recvlen < LEN_HEADER + 1 + 4) PARTLY_PACKET;
+        if (recvlen < LEN_HEADER + 4) PARTLY_PACKET;
 
         MessagePacket *packet = (MessagePacket*)recvbuf;
         if (packet->sof == PACKET_SOF && packet->idiot == 1) {

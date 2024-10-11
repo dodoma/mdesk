@@ -48,6 +48,17 @@ MessagePacket* packetMessageInit(uint8_t *buf, size_t buflen)
     return packet;
 }
 
+/*
+ * 0 1 2 3 4 5 6 7 8
+ * /---------------\
+ * n     cpuid     n
+ * |      \0       |
+ * |     Port      |
+ * |       contrl  |
+ * |     Port      |
+ * |       binary  |
+ * \---------------/
+ */
 size_t packetBroadcastFill(MessagePacket *packet,
                            const char *cpuid, uint16_t port_contrl, uint16_t port_binary)
 {
@@ -73,6 +84,14 @@ size_t packetBroadcastFill(MessagePacket *packet,
     return packetlen;
 }
 
+/*
+ * 0 1 2 3 4 5 6 7 8
+ * /---------------\
+ * |   success     |
+ * ...  errmsg   ...
+ * |      \0       |
+ * \---------------/
+ */
 size_t packetACKFill(MessagePacket *packet, uint16_t seqnum, uint16_t command,
                      bool success, const char *errmsg)
 {
@@ -91,8 +110,8 @@ size_t packetACKFill(MessagePacket *packet, uint16_t seqnum, uint16_t command,
         int msglen = strlen(errmsg);
         memcpy(buf, errmsg, msglen);
         buf += msglen;
-        *buf = 0x0; buf++;
     }
+    *buf = 0x0; buf++;
 
     size_t packetlen = buf - bufhead + 4;
     packet->length = packetlen;
@@ -100,6 +119,53 @@ size_t packetACKFill(MessagePacket *packet, uint16_t seqnum, uint16_t command,
     return packetlen;
 }
 
+/*
+ * 0 1 2 3 4 5 6 7 8
+ * /---------------\
+ * |   success     |
+ * ...  errmsg   ...
+ * |      \0       |
+ * ... message pack ...
+ * \---------------/
+ */
+size_t packetResponseFill(MessagePacket *packet, uint16_t seqnum, uint16_t command,
+                          bool success, const char *errmsg, MDF *datanode)
+{
+    if (!packet) return 0;
+
+    packet->seqnum = seqnum & 0xFFFF;
+    packet->frame_type = FRAME_RESPONSE;
+    packet->command = command;
+
+    uint8_t *buf = packet->data;
+    *buf = success; buf++;
+
+    int msglen = 0;
+    if (errmsg) {
+        msglen = strlen(errmsg);
+        memcpy(buf, errmsg, msglen);
+        buf += msglen;
+    }
+    *buf = 0x0; buf++;
+
+    size_t mpacklen = 0;
+    if (datanode) {
+        mpacklen = mdf_mpack_serialize(datanode, buf, packet->length - msglen - LEN_HEADER - 2);
+        if (mpacklen == 0) return 0;
+    }
+
+    size_t packetlen = 1 + msglen + 1 + mpacklen + LEN_HEADER + 4;
+    packet->length = packetlen;
+
+    return packetlen;
+}
+
+/*
+ * 0 1 2 3 4 5 6 7 8
+ * /---------------\
+ * ...message pack...
+ * \---------------/
+ */
 size_t packetDataFill(MessagePacket *packet, FRAME_TYPE type, uint16_t command, MDF *datanode)
 {
     if (!packet || !datanode) return 0;
@@ -114,6 +180,23 @@ size_t packetDataFill(MessagePacket *packet, FRAME_TYPE type, uint16_t command, 
     packet->length = packetlen;
 
     return packetlen;
+}
+
+/*
+ * 0 1 2 3 4 5 6 7 8
+ * /---------------\
+ * \---------------/
+ */
+size_t packetNODataFill(MessagePacket *packet, FRAME_TYPE type, uint16_t command)
+{
+    if (!packet) return 0;
+
+    packet->frame_type = type;
+    packet->command = command;
+
+    packet->length = LEN_HEADER + 4;
+
+    return packet->length;
 }
 
 bool packetCRCFill(MessagePacket *packet)
@@ -157,16 +240,4 @@ MessagePacket* packetMessageGot(uint8_t *buf, ssize_t len)
     /* TODO crc valid */
 
     return packet;
-}
-
-size_t packetNODataFill(MessagePacket *packet, FRAME_TYPE type, uint16_t command)
-{
-    if (!packet) return 0;
-
-    packet->frame_type = type;
-    packet->command = command;
-
-    packet->length = LEN_HEADER + 4;
-
-    return packet->length;
 }

@@ -180,7 +180,7 @@ MERR* dommeLoadFromFile(char *filename, DommeStore *plan)
 
     err = mdf_mpack_import_file(dbnode, filename);
     if (err) return merr_pass(err);
-    MDF_TRACE_MT(dbnode);
+    //MDF_TRACE_MT(dbnode);
 
     MDF *cnode = mdf_node_child(dbnode);
     while (cnode) {
@@ -226,7 +226,8 @@ MERR* dommeLoadFromFile(char *filename, DommeStore *plan)
                 mtc_mt_noise("restore music %s%s with id %s", dir, name, id);
 
                 mfile = mos_calloc(1, sizeof(DommeFile));
-                snprintf(mfile->id, sizeof(mfile->id), id);
+                memcpy(mfile->id, id, strlen(id) > LEN_DOMMEID ? LEN_DOMMEID : strlen(id));
+                mfile->id[LEN_DOMMEID-1] = 0;
                 mfile->dir = dir;
                 mfile->name = strdup(name);
                 mfile->title = strdup(title);

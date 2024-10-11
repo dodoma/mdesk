@@ -14,9 +14,10 @@ typedef enum {
 typedef enum {
     FRAME_CMD = 0,         /* 硬解命令 */
     FRAME_ACK,             /* 简短回包（command, success, errmsg?） */
+    FRAME_RESPONSE,        /* 完整回包（command, success, errmsg?, nodein?) */
+
     FRAME_HARDWARE,        /* 音源控制相关 */
-    FRAME_AUDIO,
-    FRAME_RESPONSE,        /* 完整回包（command, success, errmsg?, nodein at least with '{}') */
+    FRAME_AUDIO,           /* 播放相关 */
 } FRAME_TYPE;
 
 typedef enum {
@@ -33,6 +34,7 @@ typedef enum {
     SEQ_RESERVE = 0,
     SEQ_SERVER_CLOSED,
     SEQ_CONNECTION_LOST,
+    SEQ_ON_PLAYING,             /* 持续查询当前播放信息（文件，位置等） */
     SEQ_USER_START = 0x401,
 } SYS_CALLBACK_SEQ;
 
@@ -71,6 +73,8 @@ size_t packetBroadcastFill(MessagePacket *packet,
                            const char *cpuid, uint16_t port_contrl, uint16_t port_binary);
 size_t packetACKFill(MessagePacket *packet, uint16_t seqnum, uint16_t command,
                      bool success, const char *errmsg);
+size_t packetResponseFill(MessagePacket *packet, uint16_t seqnum, uint16_t command,
+                          bool success, const char *errmsg, MDF *datanode);
 size_t packetDataFill(MessagePacket *packet, FRAME_TYPE type, uint16_t cmd, MDF *datanode); /* -_-! */
 size_t packetNODataFill(MessagePacket *packet, FRAME_TYPE type, uint16_t command);
 

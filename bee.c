@@ -148,11 +148,11 @@ MERR* beeStart()
 
     BeeEntry *be = _start_driver(&hardware_driver);
     if (!be) return merr_raise(MERR_ASSERT, "硬件设置启动失败");
-
     mlist_append(g_bees, be);
 
     be = _start_driver(&audio_driver);
     if (!be) return merr_raise(MERR_ASSERT, "播放器启动失败");
+    mlist_append(g_bees, be);
 
     mlist_sort(g_bees, _bee_compare);
 
