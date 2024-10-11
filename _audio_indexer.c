@@ -76,7 +76,7 @@ static struct watcher* _add_watch(DommeStore *plan, char *subdir, int efd, struc
     arg->wd = wd;
     arg->on_dirty = 0;
     arg->plan = plan;
-    arg->path = strdup(fullpath);
+    arg->path = strdup(subdir);
     arg->next = seed;
 
     DIR *pwd = opendir(fullpath);
@@ -364,34 +364,38 @@ struct watcher* indexerWatch(int efd, struct watcher *seeds, AudioEntry *me)
 
             if (event->mask & IN_ISDIR) {
                 /* 目录动作 */
-                char fullpath[PATH_MAX] = {0};
-                snprintf(fullpath, sizeof(fullpath), "%s%s/", arg->path, event->name);
+                char pathname[PATH_MAX] = {0}, *key = pathname;
+                char fullname[PATH_MAX] = {0};
+                snprintf(pathname, PATH_MAX, "%s%s/", arg->path, event->name);
+                snprintf(fullname, PATH_MAX, "%s%s%s/", plan->basedir, arg->path, event->name);
 
                 if (event->mask & IN_CREATE) {
-                    mtc_mt_dbg("%s CREATE directory %s", arg->path, event->name);
+                    mtc_mt_dbg("%s%s CREATE directory %s", plan->basedir, arg->path, event->name);
 
-                    if (!mlist_search(plan->dirs, &fullpath, _strcompare))
-                        mlist_append(plan->dirs, strdup(fullpath));
+                    if (!mlist_search(plan->dirs, &key, _strcompare)) {
+                        mtc_mt_dbg("append dir %s", pathname);
+                        mlist_append(plan->dirs, strdup(pathname));
+                    }
 
-                    int wd = inotify_add_watch(efd, fullpath, IN_CREATE | IN_DELETE | IN_CLOSE_WRITE);
+                    int wd = inotify_add_watch(efd, fullname, IN_CREATE | IN_DELETE | IN_CLOSE_WRITE);
                     if (wd == -1) {
-                        mtc_mt_warn("can't watch %s %s", fullpath, strerror(errno));
+                        mtc_mt_warn("can't watch %s %s", fullname, strerror(errno));
                     } else {
                         struct watcher *item = mos_calloc(1, sizeof(struct watcher));
                         item->wd = wd;
                         item->plan = plan;
-                        item->path = strdup(fullpath);
+                        item->path = strdup(pathname);
                         item->next = seeds;
                         seeds = item;
                     }
                 } else if (event->mask & IN_DELETE) {
-                    mtc_mt_dbg("%s DELETE directory %s", arg->path, event->name);
+                    mtc_mt_dbg("%s%s DELETE directory %s", plan->basedir, arg->path, event->name);
                     arg = seeds;
                     struct watcher *prev = NULL, *next = NULL;
                     while (arg) {
                         next = arg->next;
 
-                        if (!strcmp(arg->path, fullpath)) {
+                        if (!strcmp(arg->path, pathname)) {
                             //mtc_mt_dbg("del watcher %s", arg->path);
                             if (arg == seeds) seeds = next;
 
@@ -412,15 +416,15 @@ struct watcher* indexerWatch(int efd, struct watcher *seeds, AudioEntry *me)
                 /* 文件动作 */
                 char filename[PATH_MAX];
                 char *fpath, *fname;
+                snprintf(filename, PATH_MAX, "%s%s%s", plan->basedir, arg->path, event->name);
 
                 if (event->mask & IN_CLOSE_WRITE) {
-                    mtc_mt_dbg("%s CREATE file %s", arg->path, event->name);
+                    mtc_mt_dbg("%s%s CREATE file %s", plan->basedir, arg->path, event->name);
 
                     if (!strcmp(event->name, "music.db")) continue;
 
                     char stitle[LEN_ID3_STRING], sartist[LEN_ID3_STRING], salbum[LEN_ID3_STRING];
                     char syear[LEN_ID3_STRING], strack[LEN_ID3_STRING];
-                    snprintf(filename, sizeof(filename), "%s%s", arg->path, event->name);
                     memset(stitle,  0x0, sizeof(stitle));
                     memset(sartist, 0x0, sizeof(sartist));
                     memset(salbum,  0x0, sizeof(salbum));
@@ -468,9 +472,8 @@ struct watcher* indexerWatch(int efd, struct watcher *seeds, AudioEntry *me)
                         } else mtc_mt_warn("%s mp3 info get failure", filename);
                     } else mtc_mt_warn("%s not mp3", filename);
                 } else if (event->mask & IN_DELETE) {
-                    mtc_mt_dbg("%s DELETE file %s", arg->path, event->name);
+                    mtc_mt_dbg("%s%s DELETE file %s", plan->basedir, arg->path, event->name);
 
-                    snprintf(filename, sizeof(filename), "%s%s", arg->path, event->name);
                     if (!_extract_filename(filename, plan, &fpath, &fname)) {
                         mtc_mt_warn("extract %s failure", filename);
                         continue;
@@ -605,7 +608,7 @@ void* dommeIndexerStart(void *arg)
                 /* timeout */
                 struct watcher *item = seeds;
                 while (item) {
-                    if (item->on_dirty && g_ctime > item->on_dirty && g_ctime - item->on_dirty > 59) {
+                    if (item->on_dirty && g_ctime > item->on_dirty && g_ctime - item->on_dirty > 9) {
                         dommeStoreDumpFilef(item->plan, "%smusic.db", item->plan->basedir);
 
                         item->on_dirty = 0;
