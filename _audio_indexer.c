@@ -3,6 +3,15 @@ struct indexer_arg {
     MLIST *files;
 };
 
+struct watcher {
+    int wd;
+    time_t on_dirty;
+    DommeStore *plan;
+    char *path;
+
+    struct watcher *next;
+};
+
 static int _scan_directory(const struct dirent *ent)
 {
     if ((ent->d_name[0] == '.' && ent->d_name[1] == 0) ||
@@ -22,10 +31,9 @@ static void _scan_for_files(DommeStore *plan, const char *subdir, MLIST *filesok
 {
     struct dirent **deps = NULL, **feps = NULL;
 
-    mtc_mt_dbg("scan directory %s", plan->basedir);
+    mtc_mt_dbg("scan directory %s", subdir);
 
-    if (!*subdir) mlist_append(plan->dirs, "./");
-    else if (!mlist_search(plan->dirs, &subdir, _strcompare)) mlist_append(plan->dirs, strdup(subdir));
+    if (!mlist_search(plan->dirs, &subdir, _strcompare)) mlist_append(plan->dirs, strdup(subdir));
 
     char fullpath[PATH_MAX] = {0};
     snprintf(fullpath, sizeof(fullpath), "%s%s", plan->basedir, subdir);
@@ -42,12 +50,55 @@ static void _scan_for_files(DommeStore *plan, const char *subdir, MLIST *filesok
     n = scandir(fullpath, &deps, _scan_directory, alphasort);
     for (int i = 0; i < n; i++) {
         char dirname[PATH_MAX];
-        snprintf(dirname, sizeof(dirname), "%s%s", subdir, deps[i]->d_name);
+        snprintf(dirname, sizeof(dirname), "%s%s/", subdir, deps[i]->d_name);
 
         _scan_for_files(plan, dirname, filesok, filesnew);
 
         free(deps[i]);
     }
+}
+
+static struct watcher* _add_watch(DommeStore *plan, char *subdir, int efd, struct watcher *seed)
+{
+    struct dirent *dirent;
+    char fullpath[PATH_MAX] = {0};
+    snprintf(fullpath, sizeof(fullpath), "%s%s", plan->basedir, subdir);
+
+    int wd = inotify_add_watch(efd, fullpath, IN_CREATE | IN_DELETE | IN_CLOSE_WRITE);
+    if (wd == -1) {
+        mtc_mt_warn("can't watch %s %s", fullpath, strerror(errno));
+        return seed;
+    }
+
+    mtc_mt_dbg("add %s to watch", fullpath);
+
+    struct watcher *arg = mos_calloc(1, sizeof(struct watcher));
+    arg->wd = wd;
+    arg->on_dirty = 0;
+    arg->plan = plan;
+    arg->path = strdup(fullpath);
+    arg->next = seed;
+
+    DIR *pwd = opendir(fullpath);
+    if (!pwd) {
+        mtc_mt_warn("open directory %s failure %s", fullpath, strerror(errno));
+        return arg;
+    }
+
+    while ((dirent = readdir(pwd)) != NULL) {
+        if (!strcmp(dirent->d_name, "..") || !strcmp(dirent->d_name, ".")) continue;
+
+        if (dirent->d_type == DT_DIR) {
+            char dirname[PATH_MAX];
+            snprintf(dirname, sizeof(dirname), "%s%s/", subdir, dirent->d_name);
+
+            arg = _add_watch(plan, dirname, efd, arg);
+        }
+    }
+
+    closedir(pwd);
+
+    return arg;
 }
 
 /*
@@ -154,7 +205,6 @@ static void* _index_music(void *arg)
             if (!disk) {
                 disk = albumCreate(salbum);
                 disk->year = strdup(syear);
-
                 mlist_append(artist->albums, disk);
                 plan->count_album++;
             }
@@ -186,21 +236,26 @@ static void* _index_music(void *arg)
 bool indexerScan(const char *basedir, DommeStore *plan, bool fresh)
 {
     char filename[PATH_MAX];
-    MLIST *filesa, *filesb;
-    bool ret = false;
+    MLIST *filesa, *filesb, *filesc;
+    DommeFile *mfile;
+    char *key;
+    bool ret = fresh; /* 对于新建索引，返回 true */
 
-    mlist_init(&filesa, free);
-    mlist_init(&filesb, free);
+    mtc_mt_dbg("scan library %s...", basedir);
+
+    mlist_init(&filesa, free);  /* 保存数据库中原有文件列表 */
+    mlist_init(&filesb, free);  /* 保存数据库中没有，媒体库中有的文件列表 （新增） */
+    mlist_init(&filesc, free);  /* 保存数据库中有，媒体库中没有的文件列表 （删除） */
 
     /*
      * 1. 已索引文件名保存至列表 filesa
      */
     if (!fresh) {
-        char *key;
-        DommeFile *mfile;
         MHASH_ITERATE(plan->mfiles, key, mfile) {
             snprintf(filename, sizeof(filename), "%s%s%s", basedir, mfile->dir, mfile->name);
             mlist_append(filesa, strdup(filename));
+
+            if (access(filename, F_OK) != 0) mlist_append(filesc, strdup(filename));
         }
     }
 
@@ -231,13 +286,33 @@ bool indexerScan(const char *basedir, DommeStore *plan, bool fresh)
         mos_free(threads);
 
         ret = true;
-    } else if (fresh) {
-        /* 对于新建索引，写入空的 music.db 并返回 true */
+    }
+
+    /*
+     * 处理已删除的媒体文件
+     */
+    if (mlist_length(filesc) > 0) {
+        char *delfile, *fpath, *fname;
+        MLIST_ITERATE(filesc, delfile) {
+            if (!_extract_filename(delfile, plan, &fpath, &fname)) {
+                mtc_mt_warn("%s not valid file", delfile);
+                continue;
+            }
+
+            MHASH_ITERATE(plan->mfiles, key, mfile) {
+                if (!strcmp(fpath, mfile->dir) && !strcmp(fname, mfile->name)) {
+                    mhash_remove(plan->mfiles, key);
+                    break;
+                }
+            }
+        }
+
         ret = true;
     }
 
     mlist_destroy(&filesa);
     mlist_destroy(&filesb);
+    mlist_destroy(&filesc);
 
     return ret;
 }
@@ -245,20 +320,202 @@ bool indexerScan(const char *basedir, DommeStore *plan, bool fresh)
 /*
  * 实时监控媒体库目录，更新至已有索引，保持持续同步
  */
-void indexerWatch(const char *basedir, DommeStore *plan, AudioEntry *me)
+struct watcher* indexerWatch(int efd, struct watcher *seeds, AudioEntry *me)
 {
+    char buf[4096] __attribute__ ((aligned(__alignof__(struct inotify_event))));
+    const struct inotify_event *event;
+    char *ptr;
+
+    DommeFile *mfile;
+    DommeAlbum *disk;
+    DommeArtist *artist;
+    DommeStore *plan;
+
+    /* Loop while events can be read from inotify file descriptor. */
+    for (;;) {
+        /* Read some events. */
+        ssize_t len = read(efd, buf, sizeof(buf));
+        if (len == -1 && errno != EAGAIN) {
+            perror("read");
+            return seeds;
+        }
+
+        /* If the nonblocking read() found no events to read, then
+           it returns -1 with errno set to EAGAIN. In that case,
+           we exit the loop. */
+        if (len <= 0) break;
+
+        /* Loop over all events in the buffer */
+        for (ptr = buf; ptr < buf + len; ptr += sizeof(struct inotify_event) + event->len) {
+            event = (const struct inotify_event *) ptr;
+
+            struct watcher *arg = seeds;
+            while (arg) {
+                if (arg->wd == event->wd) break;
+                arg = arg->next;
+            }
+
+            if (!arg || !arg->plan) {
+                mtc_mt_warn("监控外事件");
+                continue;
+            }
+
+            plan = arg->plan;
+
+            if (event->mask & IN_ISDIR) {
+                /* 目录动作 */
+                char fullpath[PATH_MAX] = {0};
+                snprintf(fullpath, sizeof(fullpath), "%s%s/", arg->path, event->name);
+
+                if (event->mask & IN_CREATE) {
+                    mtc_mt_dbg("%s CREATE directory %s", arg->path, event->name);
+
+                    if (!mlist_search(plan->dirs, &fullpath, _strcompare))
+                        mlist_append(plan->dirs, strdup(fullpath));
+
+                    int wd = inotify_add_watch(efd, fullpath, IN_CREATE | IN_DELETE | IN_CLOSE_WRITE);
+                    if (wd == -1) {
+                        mtc_mt_warn("can't watch %s %s", fullpath, strerror(errno));
+                    } else {
+                        struct watcher *item = mos_calloc(1, sizeof(struct watcher));
+                        item->wd = wd;
+                        item->plan = plan;
+                        item->path = strdup(fullpath);
+                        item->next = seeds;
+                        seeds = item;
+                    }
+                } else if (event->mask & IN_DELETE) {
+                    mtc_mt_dbg("%s DELETE directory %s", arg->path, event->name);
+                    arg = seeds;
+                    struct watcher *prev = NULL, *next = NULL;
+                    while (arg) {
+                        next = arg->next;
+
+                        if (!strcmp(arg->path, fullpath)) {
+                            //mtc_mt_dbg("del watcher %s", arg->path);
+                            if (arg == seeds) seeds = next;
+
+                            inotify_rm_watch(efd, arg->wd);
+                            mos_free(arg->path);
+                            mos_free(arg);
+                            if (prev) prev->next = next;
+
+                            break;
+                        }
+
+                        /* 没用到 else，相比 mdlist 有进步 */
+                        prev = arg;
+                        arg = next;
+                    }
+                }
+            } else if (event->len > 0) {
+                /* 文件动作 */
+                char filename[PATH_MAX];
+                char *fpath, *fname;
+
+                if (event->mask & IN_CLOSE_WRITE) {
+                    mtc_mt_dbg("%s CREATE file %s", arg->path, event->name);
+
+                    if (!strcmp(event->name, "music.db")) continue;
+
+                    char stitle[LEN_ID3_STRING], sartist[LEN_ID3_STRING], salbum[LEN_ID3_STRING];
+                    char syear[LEN_ID3_STRING], strack[LEN_ID3_STRING];
+                    snprintf(filename, sizeof(filename), "%s%s", arg->path, event->name);
+                    memset(stitle,  0x0, sizeof(stitle));
+                    memset(sartist, 0x0, sizeof(sartist));
+                    memset(salbum,  0x0, sizeof(salbum));
+                    memset(syear,   0x0, sizeof(syear));
+                    memset(strack,  0x0, sizeof(strack));
+
+                    if (!_extract_filename(filename, plan, &fpath, &fname)) {
+                        mtc_mt_warn("extract %s failure", filename);
+                        continue;
+                    }
+
+                    if (mp3dec_detect(filename) == 0) {
+                        if (mp3_id3_get(filename, stitle, sartist, salbum, syear, strack)) {
+                            mfile = mos_calloc(1, sizeof(DommeFile));
+                            mp3_md5_get(filename, mfile->id, &mfile->filesize, &mfile->duration);
+                            mfile->dir = fpath;
+                            mfile->name = strdup(event->name);
+                            mfile->title = strdup(stitle);
+                            mfile->sn = atoi(strack);
+                            mfile->touched = false;
+
+                            artist = artistFind(plan->artists, sartist);
+                            if (!artist) {
+                                artist = artistCreate(sartist);
+                                mlist_append(plan->artists, artist);
+                            }
+                            disk = albumFind(artist->albums, salbum);
+                            if (!disk) {
+                                disk = albumCreate(salbum);
+                                disk->year = strdup(syear);
+                                mlist_append(artist->albums, disk);
+                                plan->count_album++;
+                            }
+
+                            mfile->artist = artist;
+                            mfile->disk = disk;
+
+                            mlist_append(disk->tracks, mfile);
+                            artist->count_track++;
+
+                            mhash_insert(plan->mfiles, mfile->id, mfile);
+                            plan->count_track++;
+
+                            arg->on_dirty = g_ctime;
+                        } else mtc_mt_warn("%s mp3 info get failure", filename);
+                    } else mtc_mt_warn("%s not mp3", filename);
+                } else if (event->mask & IN_DELETE) {
+                    mtc_mt_dbg("%s DELETE file %s", arg->path, event->name);
+
+                    snprintf(filename, sizeof(filename), "%s%s", arg->path, event->name);
+                    if (!_extract_filename(filename, plan, &fpath, &fname)) {
+                        mtc_mt_warn("extract %s failure", filename);
+                        continue;
+                    }
+
+                    char *key;
+                    MHASH_ITERATE(plan->mfiles, key, mfile) {
+                        if (!strcmp(fpath, mfile->dir) && !strcmp(fname, mfile->name)) {
+                            mhash_remove(plan->mfiles, key);
+                            break;
+                        }
+                    }
+
+                    arg->on_dirty = g_ctime;
+                }
+            } else mtc_mt_warn("file event %d with name NLL", event->mask);
+        }
+    }
+
+    return seeds;
+}
+
+void watcherFree(struct watcher *arg)
+{
+    struct watcher *next = NULL;
+
+    while (arg) {
+        next = arg->next;
+
+        mos_free(arg->path);
+        mos_free(arg);
+
+        arg = next;
+    }
 }
 
 void* dommeIndexerStart(void *arg)
 {
     AudioEntry *me = (AudioEntry*)arg;
+    DommeStore *plan;
 
     int loglevel = mtc_level_str2int(mdf_get_value(g_config, "trace.worker", "debug"));
     mtc_mt_initf("indexer", loglevel, g_log_tostdout ? "-"  :"%slog/%s.log", g_location, "indexer");
 
     mtc_mt_dbg("I am audio indexer");
-
-    mlist_clear(me->planb);
 
     char *libroot = mdf_get_value(g_config, "libraryRoot", NULL);
     if (!libroot) {
@@ -284,31 +541,26 @@ void* dommeIndexerStart(void *arg)
             snprintf(basedir, sizeof(basedir), "%s%s", libroot, path);
             snprintf(filename, sizeof(filename), "%s%smusic.db", libroot, path);
 
-            DommeStore *plan = dommeStoreCreate();
+            plan = dommeStoreCreate();
             plan->name = strdup(name);
             plan->basedir = strdup(basedir);
             plan->moren = mdf_get_bool_value(cnode, "default", false);
 
             err = dommeLoadFromFile(filename, plan);
             if (err == MERR_OK) {
-                mlist_append(me->planb, plan);
-
-                /* 保持首次同步 (TODO 删除文件) */
+                /* 保持首次同步 */
                 if (indexerScan(basedir, plan, false)) {
                     dommeStoreDumpFilef(plan, "%smusic.db", basedir);
-                    dommeStoreReload(me, basedir, name);
-                }
-
-                indexerWatch(basedir, plan, me);
+                    dommeStoreReplace(me, plan);
+                } else dommeStoreFree(plan);
             } else {
                 if (indexerScan(basedir, plan, true)) {
-                    mlist_append(me->planb, plan);
-
                     dommeStoreDumpFilef(plan, "%smusic.db", basedir);
-                    dommeStoreReload(me, basedir, name);
-
-                    indexerWatch(basedir, plan, me);
-                } else mtc_mt_err("scan %s with directory %s failure", name, basedir);
+                    dommeStoreReplace(me, plan);
+                } else {
+                    mtc_mt_err("scan %s with directory %s failure", name, basedir);
+                    dommeStoreFree(plan);
+                }
             }
         }
 
@@ -317,8 +569,55 @@ void* dommeIndexerStart(void *arg)
 
     mdf_destroy(&config);
 
-    /* me->planb 已是最新的索引文件，并都已吐出至music.db，epoll 和 ionotify 监控目录变化 */
-    mtc_mt_dbg("planb DONE. monitor file system...");
+    /* me->plans 已是最新的索引文件，并都已吐出至music.db，poll 和 ionotify 监控目录变化 */
+    mtc_mt_dbg("plans DONE. monitor file system...");
+
+    int efd = inotify_init1(IN_NONBLOCK);
+    if (efd == -1) {
+        mtc_mt_err("inotify init failure %s", strerror(errno));
+        return NULL;
+    }
+
+    struct watcher *seeds = NULL;
+
+    MLIST_ITERATE(me->plans, plan) {
+        seeds = _add_watch(plan, "", efd, seeds);
+    }
+
+    if (seeds) {
+        struct pollfd fds[1];
+        fds[0].fd = efd;
+        fds[0].events = POLLIN;
+        int nfd = 1;
+
+        while (me->running) {
+            int poll_num = poll(fds, nfd, 1000);
+            if (poll_num == -1 && errno != EINTR) {
+                mtc_mt_err("poll error %s", strerror(errno));
+                return NULL;
+            }
+
+            if (poll_num > 0) {
+                if (fds[0].revents & POLLIN) {
+                    seeds = indexerWatch(efd, seeds, me);
+                }
+            } else if (poll_num == 0) {
+                /* timeout */
+                struct watcher *item = seeds;
+                while (item) {
+                    if (item->on_dirty && g_ctime > item->on_dirty && g_ctime - item->on_dirty > 59) {
+                        dommeStoreDumpFilef(item->plan, "%smusic.db", item->plan->basedir);
+
+                        item->on_dirty = 0;
+                    }
+
+                    item = item->next;
+                }
+            }
+        }
+    } else mtc_mt_err("no directory need to watch");
+
+    watcherFree(seeds);
 
     return MERR_OK;
 }

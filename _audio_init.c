@@ -333,6 +333,8 @@ bool dommeStoreDumpFile(DommeStore *plan, char *filename)
 {
     if (!plan || !plan->mfiles || !filename) return false;
 
+    mtc_mt_dbg("STORE DUMP %s", filename);
+
     MDF *datanode;
     mdf_init(&datanode);
 

@@ -1,3 +1,5 @@
+#include <poll.h>
+#include <sys/inotify.h>
 #include <dirent.h>
 #include <iconv.h>
 #include <alsa/asoundlib.h>
@@ -105,8 +107,6 @@ typedef struct {
 
     MLIST *plans;               /* 所有媒体库列表 */
     DommeStore *plan;           /* 当前使用的媒体库 */
-
-    MLIST *planb;               /* 索引使用的媒体库列表 */
 
     char *trackid;              /* 设置播放曲目 */
     char *album;                /* 设置播放专辑 */
@@ -789,7 +789,6 @@ void audio_stop(BeeEntry *be)
 
     mos_free(me->track);
     mlist_destroy(&me->plans);
-    mlist_destroy(&me->planb);
     mlist_destroy(&me->playlist);
 }
 
@@ -802,7 +801,6 @@ BeeEntry* _start_audio()
     me->base.stop = audio_stop;
 
     mlist_init(&me->plans, dommeStoreFree);
-    mlist_init(&me->planb, dommeStoreFree);
 
     err = dommeStoresLoad(me->plans);
     RETURN_V_NOK(err, NULL);
