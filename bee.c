@@ -263,6 +263,16 @@ void channelLeft(Channel *slot, NetClientNode *client)
     mlist_delete_item(client->channels, slot, _channel_compare);
 }
 
+void channelSend(Channel *slot, uint8_t *bufsend, size_t sendlen)
+{
+    if (!slot || !bufsend || sendlen <= 0) return;
+
+    NetClientNode *client;
+    MLIST_ITERATE(slot->users, client) {
+        if (!client->dropped) SSEND(client->base.fd, bufsend, sendlen);
+    }
+}
+
 QueueManager* queueCreate()
 {
     QueueManager *queue = mos_calloc(1, sizeof(QueueManager));

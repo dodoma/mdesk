@@ -17,6 +17,8 @@ time_t g_elapsed = 0;
 
 char *g_location = NULL;
 bool  g_log_tostdout = false;
+bool  g_dumpsend = false;
+bool  g_dumprecv = false;
 const char *g_cpuid = NULL;
 int g_efd = 0;
 
@@ -35,6 +37,9 @@ int main(int argc, char *argv[])
 
     g_location = mdf_get_value(g_config, "location", "./");
     g_log_tostdout = mdf_get_bool_value(g_config, "trace.tostdout", false);
+    g_dumpsend = mdf_get_bool_value(g_config, "trace.dumpsend", false);
+    g_dumprecv = mdf_get_bool_value(g_config, "trace.dumprecv", false);
+
     int loglevel = mtc_level_str2int(mdf_get_value(g_config, "trace.main", "debug"));
 
     err = mtc_mt_initf("main", loglevel, g_log_tostdout ? "-" : "%slog/moc.log", g_location);

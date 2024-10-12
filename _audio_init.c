@@ -217,7 +217,7 @@ MERR* dommeLoadFromFile(char *filename, DommeStore *plan)
 
             MDF *song = mdf_get_child(artnode, "d");
             while (song) {
-                if (mdf_child_count(song, NULL) != 6) continue;
+                if (mdf_child_count(song, NULL) != 4) continue;
 
                 char *id = mdf_get_value(song, "[0]", NULL);
                 char *name = mdf_get_value(song, "[1]", NULL);
@@ -233,8 +233,6 @@ MERR* dommeLoadFromFile(char *filename, DommeStore *plan)
                 mfile->title = strdup(title);
 
                 mfile->sn = mdf_get_int_value(song, "[3]", 0);
-                mfile->filesize = mdf_get_uint32_value(song, "[4]", 0);
-                mfile->duration = mdf_get_uint32_value(song, "[5]", 0);
                 mfile->touched = false;
 
                 mfile->artist = artist;
@@ -363,8 +361,6 @@ bool dommeStoreDumpFile(DommeStore *plan, char *filename)
         mdf_set_value(mnode, "1", mfile->name);
         mdf_set_value(mnode, "2", mfile->title);
         mdf_set_int_value(mnode, "3", mfile->sn);
-        mdf_set_int_value(mnode, "4", mfile->filesize);
-        mdf_set_int_value(mnode, "5", mfile->duration);
 
         mdf_object_2_array(mnode, NULL);
         mdf_object_2_array(tnode, "d");
@@ -430,7 +426,7 @@ bool dommeStoreReplace(AudioEntry *me, DommeStore *plan)
 
     me->act = ACT_STOP;
 
-    if (me->plan && !strcmp(me->plan->name, plan->name)) me->plan = plan;
+    if (plan->moren) me->plan = plan;
 
     DommeStore sample = {.name = plan->name}, *key = &sample;
     int index = mlist_index(me->plans, &key, _plan_compare);

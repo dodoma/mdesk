@@ -60,6 +60,7 @@ Channel* channelFind(MLIST *channels, const char *name, bool create);
 bool channelHas(Channel *slot, NetClientNode *client);
 bool channelJoin(Channel *slot, NetClientNode *client);
 void channelLeft(Channel *slot, NetClientNode *client);
+void channelSend(Channel *slot, uint8_t *bufsend, size_t sendlen);
 
 QueueManager* queueCreate();
 void queueFree(QueueManager *queue);

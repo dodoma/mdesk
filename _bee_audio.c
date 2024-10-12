@@ -44,8 +44,6 @@ typedef struct {
     char *title;
 
     uint8_t  sn;
-    size_t   filesize;
-    uint32_t duration;            /* in seconds */
 
     DommeAlbum  *disk;
     DommeArtist *artist;
@@ -69,11 +67,20 @@ typedef struct {
 } DommeStore;
 
 typedef struct {
+    uint64_t samples;
+    int channels;
+    int hz;
+    int layer;
+    int bps;
+} AudioInfo;
+
+typedef struct {
     char *id;                   /* 当前正在播放的曲目 */
 
     mp3dec_t mp3d;
     mp3dec_map_info_t file;     /* buffer, size */
-    mp3dec_file_info_t info;    /* samples, channels, hz, layer, bitrate_kbps */
+    AudioInfo info;
+
     uint64_t samples_eat;
     float percent;              /* 当前播放进度，或拖拽百分比 */
     size_t offset;
@@ -481,6 +488,24 @@ char* _next_todo(AudioEntry *me)
     }
 }
 
+static int _iterate_info(void *user_data, const uint8_t *frame, int frame_size,
+                         int free_format_bytes, size_t buf_size, uint64_t offset,
+                         mp3dec_frame_info_t *info)
+{
+    if (!frame) return 1;
+
+    AudioInfo *outinfo = (AudioInfo*)user_data;
+
+    outinfo->channels = info->channels;
+    outinfo->layer = info->layer;
+    outinfo->bps = info->bitrate_kbps;
+    outinfo->hz = info->hz;
+    outinfo->samples += hdr_frame_samples(frame);
+    //d->samples += mp3dec_decode_frame(d->mp3d, frame, frame_size, NULL, info);
+
+    return 0;
+}
+
 static int _iterate_callback(void *user_data, const uint8_t *frame, int frame_size,
                              int free_format_bytes, size_t buf_size, uint64_t offset,
                              mp3dec_frame_info_t *info)
@@ -550,11 +575,13 @@ static bool _play_raw(AudioEntry *me, char *filename)
 
     mp3dec_close_file(&track->file);
     mp3dec_init(&track->mp3d);
-    memset(&track->info, 0x0, sizeof(mp3dec_file_info_t));
+    memset(&track->info, 0x0, sizeof(AudioInfo));
     track->length = 0;
     track->position = 0;
 
-    mtc_mt_dbg("playing %s", filename);
+    if (me->act != ACT_DRAG && me->act != ACT_RESUME) track->percent = 0;
+
+    mtc_mt_dbg("playing %s %.2f", filename, track->percent);
 
     int ret = mp3dec_open_file(filename, &track->file);
     if (ret != 0) {
@@ -562,14 +589,13 @@ static bool _play_raw(AudioEntry *me, char *filename)
         return false;
     }
 
-    ret = mp3dec_load_buf(&track->mp3d, track->file.buffer, track->file.size,
-                          &track->info, NULL, NULL);
+    ret = mp3dec_iterate_buf(track->file.buffer, track->file.size, _iterate_info, &track->info);
     if (ret != 0) {
-        mtc_mt_err("load buffer info %s failure", filename);
+        mtc_mt_err("load info %s failure", filename);
         return false;
     }
 
-    track->length = (uint32_t)track->info.samples / track->info.hz;
+    track->length = (uint32_t)track->info.samples / track->info.hz + 1;
 
     if (track->percent != 0) {
         track->offset = track->file.size * track->percent;
@@ -579,9 +605,10 @@ static bool _play_raw(AudioEntry *me, char *filename)
         track->samples_eat = 0;
     }
 
-    mtc_mt_dbg("file info: layer %d, %zu samples, %d HZ, %d kbps, %u length",
+    mtc_mt_dbg("file info: %s layer %d, %ju samples, %d HZ, %d kbps, %u len",
+               track->info.channels == 2 ? "Stero" : "Mono",
                track->info.layer, track->info.samples, track->info.hz,
-               track->info.avg_bitrate_kbps, track->length);
+               track->info.bps, track->length);
 
     me->act = ACT_NONE;
 
@@ -730,16 +757,14 @@ static bool _push_trackinfo(void *data)
     if (slot && me->track->id) {
         MDF *nodeout;
         mdf_init(&nodeout);
-        mdf_set_value(nodeout, "trackid", "3dfasdfsa");
+        mdf_set_value(nodeout, "trackid", me->track->id);
+        mdf_set_double_value(nodeout, "progress", me->track->percent);
 
         packet = packetMessageInit(bufsend, LEN_PACKET_NORMAL);
         sendlen = packetResponseFill(packet, SEQ_ON_PLAYING, CMD_WHERE_AM_I, true, NULL, nodeout);
         packetCRCFill(packet);
 
-        NetClientNode *client;
-        MLIST_ITERATE(slot->users, client) {
-            SSEND(client->base.fd, bufsend, sendlen);
-        }
+        channelSend(slot, bufsend, sendlen);
 
         mdf_destroy(&nodeout);
     }
@@ -796,6 +821,9 @@ bool audio_process(BeeEntry *be, QueueEntry *qe)
         channelJoin(slot, qe->client);
 
         break;
+    case CMD_PLAY:
+        me->act = ACT_PLAY;
+        break;
     default:
         break;
     }
@@ -809,6 +837,7 @@ void audio_stop(BeeEntry *be)
 
     mtc_mt_dbg("stop worker %s", be->name);
 
+    me->act = ACT_STOP;
     me->running = false;
     pthread_cancel(me->worker);
     pthread_join(me->worker, NULL);
@@ -839,7 +868,8 @@ BeeEntry* _start_audio()
     me->artist = NULL;
     me->plan = dommeStoreDefault(me->plans);
 
-    me->shuffle = false;
+    me->act = ACT_NONE;
+    me->shuffle = true;
     me->loopon = false;
     me->remain = -1;
     me->dragto = 0;
@@ -849,7 +879,7 @@ BeeEntry* _start_audio()
     me->track->id = NULL;
     mp3dec_init(&me->track->mp3d);
     memset(&me->track->file, 0x0, sizeof(mp3dec_map_info_t));
-    memset(&me->track->info, 0x0, sizeof(mp3dec_file_info_t));
+    memset(&me->track->info, 0x0, sizeof(AudioInfo));
     me->track->samples_eat = 0;
     me->track->percent = 0;
     me->track->offset = 0;

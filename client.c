@@ -168,7 +168,7 @@ bool clientRecv(int sfd, NetClientNode *client)
         memset(m_recvbuf, 0x0, CONTRL_PACKET_MAX_LEN);
         while (true) {
             rv = recv(sfd, m_recvbuf + recvlen, CONTRL_PACKET_MAX_LEN - recvlen, 0);
-            MSG_DUMP_MT("RECV: ", m_recvbuf, rv);
+            MSG_DUMP_MT(g_dumprecv, "RECV: ", m_recvbuf, rv);
 
             if (rv == -1) {
                 if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -205,7 +205,7 @@ bool clientRecv(int sfd, NetClientNode *client)
         ssize_t prev_length = client->recvlen;
         while (true) {
             rv = recv(sfd, client->buf + client->recvlen, CONTRL_PACKET_MAX_LEN - client->recvlen, 0);
-            MSG_DUMP_MT("CRECV: ", client->buf + client->recvlen, rv);
+            MSG_DUMP_MT(g_dumprecv, "CRECV: ", client->buf + client->recvlen, rv);
 
             if (rv == -1) {
                 if (errno == EAGAIN || errno == EWOULDBLOCK) {

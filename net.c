@@ -310,6 +310,9 @@ void netNodeFree(NetNode *node)
     if (!node) return;
 
     switch (node->type) {
+    case NET_CLIENT_CONTRL:
+    case NET_CLIENT_BINARY:
+        return clientDrop((NetClientNode*)node);
     default:
         break;
     }
@@ -334,7 +337,7 @@ bool SSEND(int fd, uint8_t *buf, size_t len)
 
     while (count < len) {
         rv = send(fd, buf + count, len - count, MSG_NOSIGNAL);
-        MSG_DUMP_MT("SEND: ", buf + count, rv);
+        MSG_DUMP_MT(g_dumpsend, "SEND: ", buf + count, rv);
 
         if (rv == -1) {
             if (errno == EAGAIN || errno == EWOULDBLOCK)

@@ -179,7 +179,7 @@ static void* _index_music(void *arg)
             /* title, sn, artist, album */
             if (mp3_id3_get(filename, stitle, sartist, salbum, syear, strack)) {
                 mfile = mos_calloc(1, sizeof(DommeFile));
-                mp3_md5_get(filename, mfile->id, &mfile->filesize, &mfile->duration);
+                mp3_md5_get(filename, mfile->id);
                 mfile->dir = fpath;
                 mfile->name = strdup(fname);
                 mfile->title = strdup(stitle);
@@ -439,7 +439,7 @@ struct watcher* indexerWatch(int efd, struct watcher *seeds, AudioEntry *me)
                     if (mp3dec_detect(filename) == 0) {
                         if (mp3_id3_get(filename, stitle, sartist, salbum, syear, strack)) {
                             mfile = mos_calloc(1, sizeof(DommeFile));
-                            mp3_md5_get(filename, mfile->id, &mfile->filesize, &mfile->duration);
+                            mp3_md5_get(filename, mfile->id);
                             mfile->dir = fpath;
                             mfile->name = strdup(event->name);
                             mfile->title = strdup(stitle);

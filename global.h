@@ -12,6 +12,8 @@ extern time_t g_elapsed;
 
 extern char *g_location;
 extern bool  g_log_tostdout;
+extern bool  g_dumpsend;
+extern bool  g_dumprecv;
 extern const char *g_cpuid;
 extern int g_efd;
 

@@ -22,8 +22,9 @@ typedef enum {
 
 typedef enum {
     CMD_BROADCAST = 0,
-    CMD_WHERE_AM_I,         /* 当前播放信息查询 */
-    CMD_STORE_SWITCH,       /* 切换媒体库 */
+    CMD_PLAY,                   /* 播放（指定媒体文件，或者随机） */
+    CMD_WHERE_AM_I,             /* 当前播放信息查询 */
+    CMD_STORE_SWITCH,           /* 切换媒体库 */
 } COMMAND_CMD;
 
 typedef enum {

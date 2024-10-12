@@ -192,38 +192,18 @@ bool mp3_id3_get(const char *filename,
     return ret;
 }
 
-static int _iterate_callback_md5(void *user_data, const uint8_t *frame, int frame_size,
-                                 int free_format_bytes, size_t buf_size, uint64_t offset,
-                                 mp3dec_frame_info_t *info)
-{
-    if (!frame) return 1;
-
-    struct callback_data *d = user_data;
-
-    d->hz = info->hz;
-    d->samples += hdr_frame_samples(frame);
-    //d->samples += mp3dec_decode_frame(d->mp3d, frame, frame_size, NULL, info);
-
-    return 0;
-}
-
-bool mp3_md5_get(const char *filename, char id[LEN_DOMMEID], size_t *filesize, uint32_t *duration)
+bool mp3_md5_get(const char *filename, char id[LEN_DOMMEID])
 {
     mp3dec_map_info_t map_info;
 
     memset(id, 0x0, LEN_DOMMEID);
-    if (filesize) *filesize = 0;
-    if (duration) *duration = 0;
 
     if (mp3dec_open_file(filename, &map_info) != 0) return false;
-
-    /* 1. filesize */
-    if (filesize) *filesize = map_info.size;
 
     const uint8_t *buf = map_info.buffer;
     size_t size = map_info.size;
 
-    /* 2. md5 string */
+    /* md5 string */
     mp3dec_skip_id3(&buf, &size);
     unsigned char sum[16];
     mhash_md5_buf((unsigned char*)buf, size, sum);
@@ -231,16 +211,6 @@ bool mp3_md5_get(const char *filename, char id[LEN_DOMMEID], size_t *filesize, u
     /* TODO 只取16个字节中的前几个，出现了冲突再做处理 */
     mstr_bin2hexstr(sum, (int)(LEN_DOMMEID-1)/2, id);
     mstr_tolower(id);
-
-    /* 3. duration (according to https://github.com/lieff/minimp3/issues/54) */
-    if (duration) {
-        mp3dec_t mp3d;
-        mp3dec_init(&mp3d);
-
-        struct callback_data d = {&mp3d, 0, 0};
-        mp3dec_iterate_buf(map_info.buffer, map_info.size, _iterate_callback_md5, &d);
-        if (d.hz > 0) *duration = d.samples / d.hz;
-    }
 
     mp3dec_close_file(&map_info);
 

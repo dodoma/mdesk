@@ -3,6 +3,8 @@
     "libraryRoot": "/home/pi/music/",
     "trace": {
         "tostdout": true,
+        "dumpsend": false,
+        "dumprecv": false,
         "main": "debug",
         "audio": "debug",
     },
