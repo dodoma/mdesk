@@ -10,15 +10,60 @@
 
 MLIST *g_bees = NULL;
 
+static int _channel_compare(const void *a, const void *b)
+{
+    Channel *pa, *pb;
+
+    pa = *(Channel**)a;
+    pb = *(Channel**)b;
+
+    return strcmp(pa->name, pb->name);
+}
+
+static int _bee_compare(const void *a, const void *b)
+{
+    BeeEntry *pa, *pb;
+
+    pa = *(BeeEntry**)a;
+    pb = *(BeeEntry**)b;
+
+    return pa->id - pb->id;
+}
+
+static void _channel_destroy(void *p)
+{
+    if (!p) return;
+
+    Channel *slot = (Channel*)p;
+
+    mtc_mt_dbg("destroy channel %s", slot->name);
+
+    mos_free(slot->name);
+    mlist_destroy(&slot->users);
+
+    mos_free(slot);
+}
+
 static void _user_destroy(void *p)
 {
     if (!p) return;
 
     NetClientNode *client = (NetClientNode*)p;
 
-    mtc_mt_dbg("free client %p", client);
-    mos_free(client->buf);
-    mos_free(client);
+    mtc_mt_dbg("user %p left", client);
+
+    Channel *slot;
+    MLIST_ITERATE(client->channels, slot) {
+        channelLeft(slot, client);
+    }
+
+    if (mlist_length(client->bees) == 0) {
+        mtc_mt_dbg("free user %p", client);
+        mlist_destroy(&client->bees);
+        mlist_destroy(&client->channels);
+        mos_free(client->buf);
+        mos_free(client);
+    }
 }
 
 static void _bee_stop(void *p)
@@ -33,6 +78,7 @@ static void _bee_stop(void *p)
     mos_free(be->op_thread);
     queueFree(be->op_queue);
 
+    mlist_destroy(&be->channels);
     mlist_destroy(&be->users);
 
     mos_free(be);
@@ -71,6 +117,8 @@ static void* _worker(void *arg)
                 NetClientNode *client;
                 MLIST_ITERATE(be->users, client) {
                     if (client->dropped) {
+                        mlist_delete_item(client->bees, be, _bee_compare);
+
                         mlist_delete(be->users, _moon_i);
                         _moon_i--;
                     }
@@ -102,8 +150,8 @@ static void* _worker(void *arg)
 
         idle_count = 0;
 
-        if (!qentry->client->in_business) {
-            qentry->client->in_business = true;
+        if (!mlist_search(qentry->client->bees, &be, _bee_compare)) {
+            mlist_append(qentry->client->bees, be);
             mlist_append(be->users, qentry->client);
         }
 
@@ -125,21 +173,12 @@ static BeeEntry* _start_driver(BeeDriver *driver)
     be->running = true;
 
     mlist_init(&be->users, _user_destroy);
+    mlist_init(&be->channels, _channel_destroy);
     be->op_queue = queueCreate();
     be->op_thread = mos_calloc(1, sizeof(pthread_t));
     pthread_create(be->op_thread, NULL, _worker, (void*)be);
 
     return be;
-}
-
-static int _bee_compare(const void *a, const void *b)
-{
-    BeeEntry *pa, *pb;
-
-    pa = *(BeeEntry**)a;
-    pb = *(BeeEntry**)b;
-
-    return pa->id - pb->id;
 }
 
 MERR* beeStart()
@@ -169,10 +208,59 @@ BeeEntry* beeFind(uint8_t id)
     if (!g_bees) return NULL;
 
     BeeEntry dummy = {.id = id}, *key = &dummy;
-
     BeeEntry **be = (BeeEntry**)mlist_search(g_bees, &key, _bee_compare);
     if (be) return *be;
     else return NULL;
+}
+
+Channel* channelFind(MLIST *channels, const char *name, bool create)
+{
+    if (!channels || !name) return NULL;
+
+    Channel dummy = {.name = name}, *key = &dummy;
+    Channel *slot = mlist_find(channels, key, _channel_compare);
+    if (!slot) {
+        if (create) {
+            slot = mos_calloc(1, sizeof(Channel));
+            slot->name = strdup(name);
+            mlist_init(&slot->users, NULL);
+
+            mlist_append(channels, slot);
+        }
+    }
+
+    return slot;
+}
+
+/* 两者都不包含，返回 false; 有一个包含即为 true */
+bool channelHas(Channel *slot, NetClientNode *client)
+{
+    if (!slot || !client) return false;
+
+    if (mlist_search(slot->users, &client, mlist_ptrcompare) != NULL) return true;
+    if (mlist_search(client->channels, &slot, _channel_compare) != NULL) return true;
+
+    return false;
+}
+
+bool channelJoin(Channel *slot, NetClientNode *client)
+{
+    if (!slot || !client) return false;
+
+    if (!channelHas(slot, client)) {
+        mlist_append(slot->users, client);
+        mlist_append(client->channels, slot);
+    }
+
+    return true;
+}
+
+void channelLeft(Channel *slot, NetClientNode *client)
+{
+    if (!slot || !client) return;
+
+    mlist_delete_item(slot->users, client, mlist_ptrcompare);
+    mlist_delete_item(client->channels, slot, _channel_compare);
 }
 
 QueueManager* queueCreate()

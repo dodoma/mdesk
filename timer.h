@@ -6,7 +6,7 @@ typedef struct _timer_entry {
     bool right_now;             /* 无需等待timeout, 立即触发，执行后会被置否，需要时请在callback中置真 */
     bool pause;
     void *data;
-    bool (*callback)(void *data);
+    bool (*callback)(void *data); /* 返回 false 即为下次不再执行 */
 
     struct _timer_entry *next;
 } TimerEntry;

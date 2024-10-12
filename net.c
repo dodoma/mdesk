@@ -10,7 +10,7 @@
 
 #define MAXEVENTS 512
 #define BROADCAST_PERIOD 5
-#define BROADCAST_TIMEOUT 15
+#define BROADCAST_TIMEOUT 5
 
 static bool dad_call_me_back = false;
 
@@ -110,9 +110,10 @@ static int _new_connection(int efd, int sfd, NetNodeType type)
 
     mtc_mt_dbg("new connection on %d %d ==> %d", type, sfd, nitem->base.fd);
 
+    mlist_init(&nitem->bees, NULL);
+    mlist_init(&nitem->channels, NULL);
     nitem->buf = NULL;
     nitem->recvlen = 0;
-    nitem->in_business = false;
     nitem->dropped = false;
 
     struct epoll_event ev = {.data.ptr = nitem, .events = EPOLLIN | EPOLLET};

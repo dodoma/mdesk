@@ -31,7 +31,9 @@ typedef struct {
     ssize_t recvlen;
     uint8_t bufsend[LEN_PACKET_NORMAL];
 
-    bool in_business;
+    MLIST *bees;                /* list of BeeEntry* */
+    MLIST *channels;            /* list of Channel* */
+
     bool dropped;
 } NetClientNode;
 

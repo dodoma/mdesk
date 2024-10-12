@@ -608,7 +608,7 @@ void* dommeIndexerStart(void *arg)
                 /* timeout */
                 struct watcher *item = seeds;
                 while (item) {
-                    if (item->on_dirty && g_ctime > item->on_dirty && g_ctime - item->on_dirty > 9) {
+                    if (item->on_dirty && g_ctime > item->on_dirty && g_ctime - item->on_dirty > 59) {
                         dommeStoreDumpFilef(item->plan, "%smusic.db", item->plan->basedir);
 
                         item->on_dirty = 0;

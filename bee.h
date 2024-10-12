@@ -26,6 +26,11 @@ typedef struct {
     QueueEntry *bottom;
 } QueueManager;
 
+typedef struct {
+    const char *name;
+    MLIST *users;               /* list of NetClientNode* */
+} Channel;
+
 typedef struct bee_entry {
     uint8_t id;                 /* 与 FRAME_TYPE 部分对应 */
     const char *name;
@@ -34,7 +39,8 @@ typedef struct bee_entry {
     QueueManager *op_queue;
     pthread_t *op_thread;
 
-    MLIST *users;
+    MLIST *users;               /* list of NetClientNode* */
+    MLIST *channels;
 
     bool (*process)(struct bee_entry *e, QueueEntry *qe);
     void (*stop)(struct bee_entry *e);
@@ -49,6 +55,11 @@ typedef struct {
 MERR* beeStart();
 void beeStop();
 BeeEntry* beeFind(uint8_t id);
+
+Channel* channelFind(MLIST *channels, const char *name, bool create);
+bool channelHas(Channel *slot, NetClientNode *client);
+bool channelJoin(Channel *slot, NetClientNode *client);
+void channelLeft(Channel *slot, NetClientNode *client);
 
 QueueManager* queueCreate();
 void queueFree(QueueManager *queue);

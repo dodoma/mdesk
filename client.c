@@ -253,7 +253,9 @@ void clientDrop(NetClientNode *client)
     close(client->base.fd);
     client->base.fd = -1;
 
-    if (!client->in_business) {
+    if (mlist_length(client->bees) == 0) {
+        mlist_destroy(&client->channels);
+        mlist_destroy(&client->bees);
         mos_free(client->buf);
         mos_free(client);
     }

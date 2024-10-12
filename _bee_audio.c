@@ -719,6 +719,34 @@ static void* _player(void *arg)
     return NULL;
 }
 
+static bool _push_trackinfo(void *data)
+{
+    AudioEntry *me = (AudioEntry*)data;
+    uint8_t bufsend[LEN_PACKET_NORMAL];
+    MessagePacket *packet;
+    size_t sendlen;
+
+    Channel *slot = channelFind(me->base.channels, "PLAYING_INFO", false);
+    if (slot && me->track->id) {
+        MDF *nodeout;
+        mdf_init(&nodeout);
+        mdf_set_value(nodeout, "trackid", "3dfasdfsa");
+
+        packet = packetMessageInit(bufsend, LEN_PACKET_NORMAL);
+        sendlen = packetResponseFill(packet, SEQ_ON_PLAYING, CMD_WHERE_AM_I, true, NULL, nodeout);
+        packetCRCFill(packet);
+
+        NetClientNode *client;
+        MLIST_ITERATE(slot->users, client) {
+            SSEND(client->base.fd, bufsend, sendlen);
+        }
+
+        mdf_destroy(&nodeout);
+    }
+
+    return true;
+}
+
 /*
  * 可接受的指令：
  * 1. 切换媒体库, 重读媒体库索引
@@ -763,6 +791,9 @@ bool audio_process(BeeEntry *be, QueueEntry *qe)
         packetCRCFill(packet);
 
         SSEND(qe->client->base.fd, qe->client->bufsend, sendlen);
+
+        Channel *slot = channelFind(me->base.channels, "PLAYING_INFO", true);
+        channelJoin(slot, qe->client);
 
         break;
     default:
@@ -858,6 +889,8 @@ BeeEntry* _start_audio()
     pthread_create(&me->worker, NULL, _player, me);
 
     pthread_create(&me->indexer, NULL, dommeIndexerStart, me);
+
+    g_timers = timerAdd(g_timers, 2, false, me, _push_trackinfo);
 
     return (BeeEntry*)me;
 }
