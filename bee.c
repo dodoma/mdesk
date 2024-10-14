@@ -36,7 +36,13 @@ static void _channel_destroy(void *p)
 
     Channel *slot = (Channel*)p;
 
-    mtc_mt_dbg("destroy channel %s", slot->name);
+    mtc_mt_dbg("destroy channel %s %d", slot->name, mlist_length(slot->users));
+
+    NetClientNode *client;
+    MLIST_ITERATE(slot->users, client) {
+        channelLeft(slot, client);
+        _moon_i--;
+    }
 
     mos_free(slot->name);
     mlist_destroy(&slot->users);
@@ -232,6 +238,18 @@ Channel* channelFind(MLIST *channels, const char *name, bool create)
     return slot;
 }
 
+bool channelEmpty(Channel *slot)
+{
+    if (!slot || mlist_length(slot->users) <= 0) return true;
+
+    NetClientNode *client;
+    MLIST_ITERATE(slot->users, client) {
+        if (!client->dropped) return false;
+    }
+
+    return true;
+}
+
 /* 两者都不包含，返回 false; 有一个包含即为 true */
 bool channelHas(Channel *slot, NetClientNode *client)
 {
@@ -258,6 +276,8 @@ bool channelJoin(Channel *slot, NetClientNode *client)
 void channelLeft(Channel *slot, NetClientNode *client)
 {
     if (!slot || !client) return;
+
+    mtc_mt_dbg("client %p left %s", client, slot->name);
 
     mlist_delete_item(slot->users, client, mlist_ptrcompare);
     mlist_delete_item(client->channels, slot, _channel_compare);

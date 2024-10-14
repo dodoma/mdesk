@@ -9,6 +9,7 @@
 typedef enum {
     IDIOT_PING = 101,
     IDIOT_PONG,
+    IDIOT_PLAY_STEP,
 } IDIOT_INDICATOR;
 
 typedef enum {
@@ -23,8 +24,11 @@ typedef enum {
 typedef enum {
     CMD_BROADCAST = 0,
     CMD_PLAY,                   /* 播放（指定媒体文件，或者随机） */
-    CMD_WHERE_AM_I,             /* 当前播放信息查询 */
+    CMD_PLAY_INFO,              /* 查询当前播放信息 */
     CMD_STORE_SWITCH,           /* 切换媒体库 */
+    CMD_PAUSE,
+    CMD_RESUME,
+    CMD_NEXT,
 } COMMAND_CMD;
 
 typedef enum {
@@ -35,7 +39,8 @@ typedef enum {
     SEQ_RESERVE = 0,
     SEQ_SERVER_CLOSED,
     SEQ_CONNECTION_LOST,
-    SEQ_ON_PLAYING,             /* 持续查询当前播放信息（文件，位置等） */
+    SEQ_PLAY_INFO,              /* 查询当前播放信息（文件，艺术家等），音源切歌时可主动推送 */
+    SEQ_PLAY_STEP,              /* 音源正常播放中 */
     SEQ_USER_START = 0x401,
 } SYS_CALLBACK_SEQ;
 
@@ -60,6 +65,7 @@ typedef struct {
 
 size_t packetPINGFill(uint8_t *buf, size_t buflen);
 size_t packetPONGFill(uint8_t *buf, size_t buflen);
+size_t packetIdiotFill(uint8_t *buf, IDIOT_INDICATOR idiot);
 
 /*
  * message packet 3 steps:

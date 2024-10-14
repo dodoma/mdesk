@@ -57,6 +57,7 @@ void beeStop();
 BeeEntry* beeFind(uint8_t id);
 
 Channel* channelFind(MLIST *channels, const char *name, bool create);
+bool channelEmpty(Channel *slot);
 bool channelHas(Channel *slot, NetClientNode *client);
 bool channelJoin(Channel *slot, NetClientNode *client);
 void channelLeft(Channel *slot, NetClientNode *client);

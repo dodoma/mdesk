@@ -28,6 +28,18 @@ size_t packetPONGFill(uint8_t *buf, size_t buflen)
     return LEN_IDIOT;
 }
 
+size_t packetIdiotFill(uint8_t *buf, IDIOT_INDICATOR idiot)
+{
+    if (!buf) return 0;
+
+    memset(buf, 0x0, LEN_IDIOT);
+
+    *buf = PACKET_SOF; buf++;
+    *buf = idiot; buf++;
+
+    return LEN_IDIOT;
+}
+
 MessagePacket* packetMessageInit(uint8_t *buf, size_t buflen)
 {
     static uint16_t seqnum = SEQ_USER_START; /* 0 ~ 1024 的 seqnum 被系统固定回调占用 */
