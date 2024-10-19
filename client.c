@@ -43,6 +43,21 @@ static bool _parse_packet(NetClientNode *client, MessagePacket *packet)
         pthread_mutex_unlock(&be->op_queue->lock);
 
         break;
+    case FRAME_STORAGE:
+        be = beeFind(FRAME_STORAGE);
+        if (!be) {
+            mtc_mt_err("lookup backend %d failure", FRAME_STORAGE);
+            mdf_destroy(&datanode);
+            return false;
+        }
+
+        qe = queueEntryCreate(packet->seqnum, packet->command, client, datanode);
+        pthread_mutex_lock(&be->op_queue->lock);
+        queueEntryPush(be->op_queue, qe);
+        pthread_cond_signal(&be->op_queue->cond);
+        pthread_mutex_unlock(&be->op_queue->lock);
+
+        break;
     case FRAME_HARDWARE:
         be = beeFind(FRAME_HARDWARE);
         if (!be) {
@@ -63,6 +78,24 @@ static bool _parse_packet(NetClientNode *client, MessagePacket *packet)
         pthread_cond_signal(&be->op_queue->cond);
         pthread_mutex_unlock(&be->op_queue->lock);
 
+        break;
+    case FRAME_CMD:
+        if (packet->command == CMD_STORE_LIST) {
+            uint8_t bufsend[LEN_PACKET_NORMAL];
+
+            MDF *dnode;
+            mdf_init(&dnode);
+            char *libroot = mdf_get_value(g_config, "libraryRoot", "");
+            mdf_json_import_filef(dnode, "%sconfig.json", libroot);
+
+            MessagePacket *packetr = packetMessageInit(bufsend, LEN_PACKET_NORMAL);
+            size_t sendlen = packetResponseFill(packetr,
+                                                packet->seqnum, packet->command, true, NULL, dnode);
+            packetCRCFill(packet);
+            mdf_destroy(&dnode);
+
+            SSEND(client->base.fd, bufsend, sendlen);
+        }
         break;
     default:
         mtc_mt_warn("unsupport frame %d", packet->frame_type);

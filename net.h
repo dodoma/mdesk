@@ -1,7 +1,7 @@
 #ifndef __NET_H__
 #define __NET_H__
 
-#define LEN_PACKET_NORMAL 512
+#define LEN_PACKET_NORMAL 1024
 #define CONTRL_PACKET_MAX_LEN 10485760
 
 typedef enum {

@@ -19,21 +19,30 @@ typedef enum {
 
     FRAME_HARDWARE,        /* 音源控制相关 */
     FRAME_AUDIO,           /* 播放相关 */
+    FRAME_STORAGE
 } FRAME_TYPE;
 
 typedef enum {
     CMD_BROADCAST = 0,
-    CMD_PLAY,                   /* 播放（指定媒体文件，或者随机） */
-    CMD_PLAY_INFO,              /* 查询当前播放信息 */
-    CMD_STORE_SWITCH,           /* 切换媒体库 */
-    CMD_PAUSE,
-    CMD_RESUME,
-    CMD_NEXT,
+    CMD_STORE_LIST,
 } COMMAND_CMD;
 
 typedef enum {
     CMD_WIFI_SET = 0,
 } COMMAND_HDARDWAR;
+
+typedef enum {
+    CMD_PLAY = 0,               /* 播放（指定媒体文件，或者随机） */
+    CMD_PLAY_INFO,              /* 查询当前播放信息 */
+    CMD_PAUSE,
+    CMD_RESUME,
+    CMD_NEXT,
+    CMD_STORE_SWITCH,           /* 切换媒体库 */
+} COMMAND_AUDIO;
+
+typedef enum {
+    CMD_DB_MD5 = 0,
+} COMMAND_STORAGE;
 
 typedef enum {
     SEQ_RESERVE = 0,

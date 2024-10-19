@@ -7,6 +7,7 @@
 
 #include "_bee_hardware.c"
 #include "_bee_audio.c"
+#include "_bee_storage.c"
 
 MLIST *g_bees = NULL;
 
@@ -197,6 +198,10 @@ MERR* beeStart()
 
     be = _start_driver(&audio_driver);
     if (!be) return merr_raise(MERR_ASSERT, "播放器启动失败");
+    mlist_append(g_bees, be);
+
+    be = _start_driver(&storage_driver);
+    if (!be) return merr_raise(MERR_ASSERT, "存储管理启动失败");
     mlist_append(g_bees, be);
 
     mlist_sort(g_bees, _bee_compare);
