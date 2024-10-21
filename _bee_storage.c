@@ -1,3 +1,8 @@
+typedef enum {
+    SYNC_RAWFILE = 0,
+    SYNC_TRACK_COVER,
+} SYNC_TYPE;
+
 typedef struct {
     BeeEntry base;
 
@@ -6,9 +11,11 @@ typedef struct {
     pthread_cond_t cond;
     bool running;
 
-    char *basedir;
+    char *libroot;
 
     MDF *storeconfig;
+
+    DommeStore *plan;
     char *storename;
     char *storepath;
 
@@ -16,7 +23,8 @@ typedef struct {
 } StorageEntry;
 
 struct reqitem {
-    char *filename;             /* except basedir */
+    char *name;
+    SYNC_TYPE type;
     NetBinaryNode *client;
 };
 
@@ -41,29 +49,32 @@ void reqitem_free(void *arg)
     if (!arg) return;
 
     struct reqitem *item = (struct reqitem*)arg;
-    mos_free(item->filename);
+    mos_free(item->name);
     mos_free(item);
 }
 
-bool _do_push(StorageEntry *me, struct reqitem *item)
+bool _push_raw(StorageEntry *me, struct reqitem *item)
 {
-    mtc_mt_dbg("push %s to %d", item->filename, item->client->base.fd);
+    mtc_mt_dbg("push %s to %d", item->name, item->client->base.fd);
 
     NetBinaryNode *client = item->client;
 
-    if (client->base.fd <= 0) return false;
+    if (client->base.fd <= 0 || !me->storepath) return false;
 
     char filename[PATH_MAX] = {0};
-    snprintf(filename, sizeof(filename), "%s%s", me->basedir, item->filename);
+    snprintf(filename, sizeof(filename), "%s%s%s", me->libroot, me->storepath, item->name);
 
     /*
      * CMD_SYNC
      */
     struct stat fs;
     if (stat(filename, &fs) == 0) {
+        char nameWithPath[PATH_MAX];
+        snprintf(nameWithPath, sizeof(nameWithPath), "%s%s", me->storepath, item->name);
+
         uint8_t bufsend[LEN_PACKET_NORMAL];
         MessagePacket *packet = packetMessageInit(bufsend, LEN_PACKET_NORMAL);
-        size_t sendlen = packetBFileFill(packet, item->filename, fs.st_size);
+        size_t sendlen = packetBFileFill(packet, nameWithPath, fs.st_size);
         packetCRCFill(packet);
 
         SSEND(client->base.fd, bufsend, sendlen);
@@ -85,6 +96,45 @@ bool _do_push(StorageEntry *me, struct reqitem *item)
     }
 
     fclose(fp);
+
+    return true;
+}
+
+bool _push_cover(StorageEntry *me, struct reqitem *item)
+{
+    mtc_mt_dbg("push %s to %d", item->name, item->client->base.fd);
+
+    NetBinaryNode *client = item->client;
+
+    if (client->base.fd <= 0 || !me->storepath) return false;
+
+    DommeFile *mfile = dommeGetFile(me->plan, item->name);
+    if (mfile) {
+        uint8_t *imgbuf;
+        size_t coversize;
+        char filename[PATH_MAX] = {0};
+        snprintf(filename, sizeof(filename), "%s%s%s%s",
+                 me->libroot, me->storepath, mfile->dir, mfile->name);
+
+        mp3dec_map_info_t *mapinfo = mp3_cover_open(filename, &imgbuf, &coversize);
+        if (!mapinfo) return false;
+
+        /* CMD_SYNC */
+        char nameWithPath[PATH_MAX];
+        snprintf(nameWithPath, sizeof(nameWithPath), "assets/cover/%s.jpg", item->name);
+
+        uint8_t bufsend[LEN_PACKET_NORMAL];
+        MessagePacket *packet = packetMessageInit(bufsend, LEN_PACKET_NORMAL);
+        size_t sendlen = packetBFileFill(packet, nameWithPath, coversize);
+        packetCRCFill(packet);
+
+        SSEND(client->base.fd, bufsend, sendlen);
+
+        /* file contents */
+        SSEND(client->base.fd, imgbuf, coversize);
+
+        mp3_cover_close(mapinfo);
+    } else mtc_mt_warn("%s not exist", item->name);
 
     return true;
 }
@@ -129,7 +179,16 @@ void* _pusher(void *arg)
 
         if (!item) continue;
 
-        _do_push(me, item);
+        switch (item->type) {
+        case SYNC_RAWFILE:
+            _push_raw(me, item);
+            break;
+        case SYNC_TRACK_COVER:
+            _push_cover(me, item);
+            break;
+        default:
+            break;
+        }
 
         reqitem_free(item);
     }
@@ -137,18 +196,19 @@ void* _pusher(void *arg)
     return NULL;
 }
 
-void _push(StorageEntry *me, const char *filename, NetBinaryNode *client)
+void _push(StorageEntry *me, const char *name, SYNC_TYPE stype, NetBinaryNode *client)
 {
-    if (!me || !filename) return;
+    if (!me || !name) return;
 
     if (!client) {
-        mtc_mt_warn("%s client null", filename);
+        mtc_mt_warn("%s client null", name);
         return;
     }
 
     struct reqitem *item = (struct reqitem*)mos_calloc(1, sizeof(struct reqitem));
-    item->filename = strdup(filename);
+    item->name = strdup(name);
     item->client = client;
+    item->type = stype;
 
     pthread_mutex_lock(&me->lock);
     mlist_append(me->synclist, item);
@@ -158,12 +218,14 @@ void _push(StorageEntry *me, const char *filename, NetBinaryNode *client)
 
 bool storage_process(BeeEntry *be, QueueEntry *qe)
 {
+    MERR *err;
     StorageEntry *me = (StorageEntry*)be;
-    char filename[PATH_MAX] = {0};
 
     mtc_mt_dbg("process command %d", qe->command);
+    MDF_TRACE_MT(qe->nodein);
 
     switch (qe->command) {
+    /* 为减少网络传输，CMD_DB_MD5为同步前必传，用以指定后续同步文件之媒体库 */
     case CMD_DB_MD5:
     {
         char *name = mdf_get_value(qe->nodein, "name", NULL);
@@ -175,13 +237,50 @@ bool storage_process(BeeEntry *be, QueueEntry *qe)
             break;
         }
 
-        char *checksum = mdf_get_value(qe->nodein, "checksum", NULL);
-        if (!checksum) {
-            mtc_mt_dbg("dbsync, push %s music.db", name);
-
-            snprintf(filename, sizeof(filename), "%smusic.db", me->storepath);
-            _push(me, filename, qe->client->binary);
+        if (me->plan) dommeStoreFree(me->plan);
+        me->plan = dommeStoreCreate();
+        me->plan->name = strdup(me->storename);
+        me->plan->basedir = strdup(me->storepath);
+        err = dommeLoadFromFilef(me->plan, "%s%smusic.db", me->libroot, me->storepath);
+        if (err) {
+            TRACE_NOK_MT(err);
+            break;
         }
+
+        char filename[PATH_MAX] = {0};
+        snprintf(filename, sizeof(filename), "%s%smusic.db", me->libroot, me->storepath);
+        char ownsum[33] = {0};
+        ssize_t ownsize = mhash_md5_file_s(filename, ownsum);
+        if (ownsize >= 0) {
+            int64_t insize = mdf_get_int64_value(qe->nodein, "size", 0);
+            char *insum = mdf_get_value(qe->nodein, "checksum", NULL);
+            if (insize != ownsize || !insum || strcmp(ownsum, insum)) {
+                mtc_mt_dbg("dbsync, push %s music.db", name);
+
+                MessagePacket *packet = packetMessageInit(qe->client->bufsend, LEN_PACKET_NORMAL);
+                size_t sendlen = packetACKFill(packet, qe->seqnum, qe->command, false, "文件已更新");
+                packetCRCFill(packet);
+
+                SSEND(qe->client->base.fd, qe->client->bufsend, sendlen);
+
+                _push(me, "music.db", SYNC_RAWFILE, qe->client->binary);
+            } else {
+                /* 文件没更新 */
+                MessagePacket *packet = packetMessageInit(qe->client->bufsend, LEN_PACKET_NORMAL);
+                size_t sendlen = packetACKFill(packet, qe->seqnum, qe->command, true, NULL);
+                packetCRCFill(packet);
+
+                SSEND(qe->client->base.fd, qe->client->bufsend, sendlen);
+            }
+        } else mtc_mt_warn("%s db not exist", me->storepath);
+    }
+    break;
+    case CMD_SYNC_PULL:
+    {
+        char *name = mdf_get_value(qe->nodein, "name", NULL);
+        SYNC_TYPE type = mdf_get_int_value(qe->nodein, "type", SYNC_RAWFILE);
+
+        if (name) _push(me, name, type, qe->client->binary);
     }
     break;
     default:
@@ -201,6 +300,7 @@ void storage_stop(BeeEntry *be)
     pthread_cancel(me->worker);
     pthread_join(me->worker, NULL);
 
+    if (me->plan) dommeStoreFree(me->plan);
     mdf_destroy(&me->storeconfig);
     mlist_destroy(&me->synclist);
 }
@@ -213,16 +313,17 @@ BeeEntry* _start_storage()
     me->base.process = storage_process;
     me->base.stop = storage_stop;
 
-    me->basedir = mdf_get_value(g_config, "libraryRoot", NULL);
-    if (!me->basedir) {
+    me->libroot = mdf_get_value(g_config, "libraryRoot", NULL);
+    if (!me->libroot) {
         mtc_mt_err("library root path not found");
         return NULL;
     }
     mdf_init(&me->storeconfig);
 
-    err = mdf_json_import_filef(me->storeconfig, "%sconfig.json", me->basedir);
+    err = mdf_json_import_filef(me->storeconfig, "%sconfig.json", me->libroot);
     RETURN_V_NOK(err, NULL);
 
+    me->plan = NULL;
     me->storename = NULL;
     me->storepath = NULL;
     mlist_init(&me->synclist, reqitem_free);

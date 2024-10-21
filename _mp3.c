@@ -216,3 +216,110 @@ bool mp3_md5_get(const char *filename, char id[LEN_DOMMEID])
 
     return true;
 }
+
+static bool _seek_cover(const uint8_t *buf, size_t len, uint8_t **outmem, size_t *outlen)
+{
+	const char id3v2_3[] = "TIT2TALBTPE1TRCKTYERTLENAPICTPE2UNKN";  //id3, v2, spec 3 uses 4 byte ID
+	const char id3v2_2[] = "TT2 TAL TP1 TRK TYE TLE PIC TP2 UNK ";  //id3, v2, spec 2 uses 3 byte ID
+
+    int taglen = (buf[9]) | (buf[8] << 7) | (buf[7] << 14) | (buf[6] << 28);
+
+    if (taglen > len) return false;
+
+    bool spec3 = (buf[3] == 0x03) || (buf[3] == 0x04);
+
+    const char *tagname = spec3 ? (id3v2_3+(ID3_PIC*4)) : (id3v2_2+(ID3_PIC*4));
+    int header_size = spec3 ? 10 : 6;
+    int tagname_size = spec3 ? 4 : 3;
+    unsigned long frame_size = 0;
+    const uint8_t *pos = buf + 10;
+
+    while (taglen > 0) {
+        if (spec3) frame_size = (pos[7]) | (pos[6] << 8) | (pos[5] << 16) | ((pos[4] << 16) << 16);
+        else frame_size = (pos[5]) | (pos[4] << 8) | (pos[3] << 16);
+
+        //mtc_mt_dbg("%.*s length %lu", tagname_size, pos, frame_size);
+
+        if (!strncmp((char*)pos, tagname, tagname_size)) {
+            pos += header_size;
+
+            uint32_t needtoread = frame_size - 1;
+            uint8_t encoding = *pos;
+            pos++;
+
+            uint32_t infolen = 0;
+
+            /* mime */
+            while (infolen < 30 && *pos != '\0') {
+                pos++;
+                infolen++;
+            }
+            pos++;
+            infolen++;
+
+            /* picture type */
+            pos++;
+            infolen++;
+
+            /* description */
+            if (encoding == 0x01 || encoding == 0x02) {
+                /* skip UTF-16 description */
+                while (infolen < needtoread && *(uint16_t*)pos != 0) {
+                    pos += 2;
+                    infolen += 2;
+                }
+                /* skip end */
+                pos += 2;
+                infolen += 2;
+            } else {
+                /* skip UTF-8 or Latin-1 description */
+                while (infolen < needtoread && *pos != 0) {
+                    pos += 1;
+                    infolen += 1;
+                }
+                /* skip end */
+                pos += 1;
+                infolen += 1;
+            }
+
+            if (infolen < needtoread) {
+                *outmem = (uint8_t*)pos;
+                *outlen = needtoread - infolen;
+                return true;
+            } else return false;
+        } else {
+            pos += (frame_size + header_size);
+            taglen -= (frame_size + header_size);
+        }
+    }
+
+    return false;
+}
+
+mp3dec_map_info_t* mp3_cover_open(const char *filename, uint8_t **imgbuf, size_t *imgsize)
+{
+    if (!filename || !imgsize || !imgbuf) return NULL;
+
+    mp3dec_map_info_t *mapinfo = mos_calloc(1, sizeof(mp3dec_map_info_t));
+    if (mp3dec_open_file(filename, mapinfo) != 0) {
+        mtc_mt_warn("open %s failure", filename);
+        mos_free(mapinfo);
+        return NULL;
+    }
+
+    if (!_seek_cover(mapinfo->buffer, mapinfo->size, imgbuf, imgsize)) {
+        mtc_mt_warn("%s cover empty", filename);
+        mos_free(mapinfo);
+        return NULL;
+    }
+
+    return mapinfo;
+}
+
+void mp3_cover_close(mp3dec_map_info_t *mapinfo)
+{
+    if (!mapinfo) return;
+
+    mp3dec_close_file(mapinfo);
+    mos_free(mapinfo);
+}

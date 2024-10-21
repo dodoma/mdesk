@@ -45,6 +45,7 @@ typedef enum {
 
 typedef enum {
     CMD_DB_MD5 = 0,
+    CMD_SYNC_PULL,
 } COMMAND_STORAGE;
 
 typedef enum {

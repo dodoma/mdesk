@@ -3,11 +3,7 @@
 #include <dirent.h>
 #include <iconv.h>
 #include <alsa/asoundlib.h>
-#define MINIMP3_IMPLEMENTATION
-#define MINIMP3_ALLOW_MONO_STEREO_TRANSITION
-#include "minimp3_ex.h"
 
-#define LEN_DOMMEID 11
 #define LEN_ID3_STRING 128
 
 typedef enum {
@@ -20,51 +16,6 @@ typedef enum {
     ACT_DRAG,
     ACT_STOP,
 } PLAY_ACTION;
-
-typedef struct {
-    char *title;
-    char *year;
-    MLIST *tracks;
-    uint32_t pos;               /* 当前播放曲目 */
-} DommeAlbum;
-
-typedef struct {
-    char *name;
-    MLIST *albums;
-    uint32_t count_track;
-    uint32_t pos;               /* 当前播放专辑 */
-} DommeArtist;
-
-typedef struct {
-    char id[LEN_DOMMEID];
-
-    char *dir;                  /* directory part of filename */
-    char *name;                 /* name part of filename */
-
-    char *title;
-
-    uint8_t  sn;
-
-    DommeAlbum  *disk;
-    DommeArtist *artist;
-
-    bool touched;
-} DommeFile;
-
-typedef struct {
-    char *name;
-    char *basedir;
-    bool moren;                 /* 默认媒体库 */
-
-    MLIST *dirs;
-    MHASH *mfiles;
-    MLIST *artists;
-
-    uint32_t count_album;
-    uint32_t count_track;
-    uint32_t count_touched;
-    uint32_t pos;               /* 当前播放曲目 */
-} DommeStore;
 
 typedef struct {
     uint64_t samples;
