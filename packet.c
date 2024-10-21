@@ -82,13 +82,73 @@ size_t packetBroadcastFill(MessagePacket *packet,
     packet->command = CMD_BROADCAST;
 
     uint8_t *buf = packet->data;
-    int idlen = strlen(cpuid);
-    memcpy(buf, cpuid, idlen);
-    buf += idlen;
+    int slen = strlen(cpuid);
+    memcpy(buf, cpuid, slen);
+    buf += slen;
     *buf = 0x0; buf++;
 
     *(uint16_t*)buf = port_contrl; buf += 2;
     *(uint16_t*)buf = port_binary; buf += 2;
+
+    size_t packetlen = buf - bufhead + 4;
+    packet->length = packetlen;
+
+    return packetlen;
+}
+
+/*
+ * 0 1 2 3 4 5 6 7 8
+ * /---------------\
+ * n   clientid    n
+ * |      \0       |
+ * \---------------/
+ */
+size_t packetConnectFill(MessagePacket *packet, const char *clientid)
+{
+    if (!packet || !clientid) return 0;
+
+    uint8_t *bufhead = (uint8_t*)packet;
+
+    packet->frame_type = FRAME_CMD;
+    packet->command = CMD_CONNECT;
+
+    uint8_t *buf = packet->data;
+    int slen = strlen(clientid);
+    memcpy(buf, clientid, slen);
+    buf += slen;
+    *buf = 0x0; buf++;
+
+    size_t packetlen = buf - bufhead + 4;
+    packet->length = packetlen;
+
+    return packetlen;
+}
+
+/*
+ * 0 1 2 3 4 5 6 7 8
+ * /---------------\
+ * n   filename    n
+ * |      \0       |
+ * 8   filesize    8
+ * \---------------/
+ */
+size_t packetBFileFill(MessagePacket *packet, const char *filename, uint64_t size)
+{
+    if (!packet || !filename) return 0;
+
+    uint8_t *bufhead = (uint8_t*)packet;
+
+    packet->frame_type = FRAME_CMD;
+    packet->command = CMD_SYNC;
+
+    uint8_t *buf = packet->data;
+    int slen = strlen(filename);
+    memcpy(buf, filename, slen);
+    buf += slen;
+    *buf = 0x0; buf++;
+
+    *(uint64_t*)buf = size;
+    buf += 8;
 
     size_t packetlen = buf - bufhead + 4;
     packet->length = packetlen;
@@ -248,7 +308,7 @@ MessagePacket* packetMessageGot(uint8_t *buf, ssize_t len)
 
     if (packet->sof != PACKET_SOF) return NULL;
     if (packet->idiot != 1) return NULL;
-    if (packet->length != len) return NULL;
+    //if (packet->length != len) return NULL;
     /* TODO crc valid */
 
     return packet;

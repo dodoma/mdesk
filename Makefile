@@ -26,7 +26,7 @@ include $(DEPEND)
 %.o: %.c
 	$(CC) $(CFLAGS) $(INCS) -o $@ -c $<
 
-sucker: 0main.o rpi.o bee.o net.o client.o timer.o packet.o
+sucker: 0main.o rpi.o bee.o net.o client.o binary.o timer.o packet.o
 	$(CC) $(CFLAGS) $^ -o $@ $(LIBS)
 
 test: test.o

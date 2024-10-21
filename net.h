@@ -1,6 +1,7 @@
 #ifndef __NET_H__
 #define __NET_H__
 
+#define LEN_CLIENTID 11
 #define LEN_PACKET_NORMAL 1024
 #define CONTRL_PACKET_MAX_LEN 10485760
 
@@ -26,6 +27,8 @@ typedef struct {
 
 typedef struct {
     NetNode base;
+    char id[LEN_CLIENTID];
+    struct _net_binary_node *binary;
 
     uint8_t *buf;               /* receive buffer */
     ssize_t recvlen;
@@ -36,6 +39,14 @@ typedef struct {
 
     bool dropped;
 } NetClientNode;
+
+typedef struct _net_binary_node {
+    NetNode base;
+    NetClientNode *contrl;
+
+    uint8_t *buf;               /* receive buffer */
+    ssize_t recvlen;
+} NetBinaryNode;
 
 MERR* netExposeME();
 

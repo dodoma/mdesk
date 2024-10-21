@@ -5,109 +5,47 @@
 #include "global.h"
 #include "net.h"
 #include "client.h"
+#include "binary.h"
 #include "packet.h"
-#include "bee.h"
 
-static MLIST *m_clients = NULL;
 static uint8_t *m_recvbuf = NULL;
 
-static bool _parse_packet(NetClientNode *client, MessagePacket *packet)
+static bool _parse_packet(NetBinaryNode *client, MessagePacket *packet)
 {
-    BeeEntry *be;
-    QueueEntry *qe;
-
     mtc_mt_dbg("parse packet %d %d", packet->frame_type, packet->command);
 
-    MDF *datanode;
-    mdf_init(&datanode);
-    if (packet->frame_type > FRAME_RESPONSE && packet->length > LEN_HEADER + 4) {
-        if (mdf_mpack_deserialize(datanode, packet->data, packet->length - LEN_HEADER - 4) <= 0) {
-            mtc_mt_warn("message pack deserialize failure");
-            mdf_destroy(&datanode);
-            return false;
-        }
-    }
-
     switch (packet->frame_type) {
-    case FRAME_AUDIO:
-        be = beeFind(FRAME_AUDIO);
-        if (!be) {
-            mtc_mt_err("lookup backend %d failure", FRAME_AUDIO);
-            mdf_destroy(&datanode);
-            return false;
-        }
-
-        qe = queueEntryCreate(packet->seqnum, packet->command, client, datanode);
-        pthread_mutex_lock(&be->op_queue->lock);
-        queueEntryPush(be->op_queue, qe);
-        pthread_cond_signal(&be->op_queue->cond);
-        pthread_mutex_unlock(&be->op_queue->lock);
-
-        break;
-    case FRAME_STORAGE:
-        be = beeFind(FRAME_STORAGE);
-        if (!be) {
-            mtc_mt_err("lookup backend %d failure", FRAME_STORAGE);
-            mdf_destroy(&datanode);
-            return false;
-        }
-
-        qe = queueEntryCreate(packet->seqnum, packet->command, client, datanode);
-        pthread_mutex_lock(&be->op_queue->lock);
-        queueEntryPush(be->op_queue, qe);
-        pthread_cond_signal(&be->op_queue->cond);
-        pthread_mutex_unlock(&be->op_queue->lock);
-
-        break;
-    case FRAME_HARDWARE:
-        be = beeFind(FRAME_HARDWARE);
-        if (!be) {
-            mtc_mt_err("lookup backend %d failure", FRAME_HARDWARE);
-            mdf_destroy(&datanode);
-            return false;
-        }
-
-        qe = queueEntryCreate(packet->seqnum, packet->command, client, datanode);
-        if (!qe) {
-            mtc_mt_warn("queue entry create failure");
-            mdf_destroy(&datanode);
-            return false;
-        }
-
-        pthread_mutex_lock(&be->op_queue->lock);
-        queueEntryPush(be->op_queue, qe);
-        pthread_cond_signal(&be->op_queue->cond);
-        pthread_mutex_unlock(&be->op_queue->lock);
-
-        break;
     case FRAME_CMD:
-        if (packet->command == CMD_STORE_LIST) {
-            uint8_t bufsend[LEN_PACKET_NORMAL];
+        if (packet->command == CMD_CONNECT) {
+            /* 绑定 contrl socket */
+            char clientid[LEN_CLIENTID] = {0};
+            uint8_t *buf = packet->data;
 
-            MDF *dnode;
-            mdf_init(&dnode);
-            char *libroot = mdf_get_value(g_config, "libraryRoot", "");
-            mdf_json_import_filef(dnode, "%sconfig.json", libroot);
+            int idlen = strlen((char*)buf);
+            strncpy(clientid, (char*)buf, idlen > LEN_CLIENTID ? LEN_CLIENTID: idlen);
+            buf += idlen;
+            buf++;              /* '\0' */
 
-            MessagePacket *packetr = packetMessageInit(bufsend, LEN_PACKET_NORMAL);
-            size_t sendlen = packetResponseFill(packetr,
-                                                packet->seqnum, packet->command, true, NULL, dnode);
-            packetCRCFill(packet);
-            mdf_destroy(&dnode);
-
-            SSEND(client->base.fd, bufsend, sendlen);
+            NetClientNode *contrl = clientMatch(clientid);
+            if (contrl) {
+                mtc_mt_dbg("%d matched contrl socket %d by %s",
+                           client->base.fd, contrl->base.fd, clientid);
+                contrl->binary = client;
+                client->contrl = contrl;
+            }
+        //} else if (packet->command == CMD_SYNC) {
+            /* 发送文件 */
         }
         break;
     default:
         mtc_mt_warn("unsupport frame %d", packet->frame_type);
-        mdf_destroy(&datanode);
         return false;
     }
 
     return true;
 }
 
-static bool _parse_recv(NetClientNode *client, uint8_t *recvbuf, size_t recvlen)
+static bool _parse_recv(NetBinaryNode *client, uint8_t *recvbuf, size_t recvlen)
 {
 #define PARTLY_PACKET                                           \
     do {                                                        \
@@ -124,25 +62,17 @@ static bool _parse_recv(NetClientNode *client, uint8_t *recvbuf, size_t recvlen)
 
     uint8_t sendbuf[256] = {0};
     size_t sendlen = 0;
-    MessagePacket *outpacket = NULL;
     IdiotPacket *ipacket = packetIdiotGot(recvbuf, recvlen);
     if (ipacket) {
         switch (ipacket->idiot) {
         case IDIOT_PING:
             //mtc_mt_dbg("ping received");
-            netHornPing();
             sendlen = packetPONGFill(sendbuf, sizeof(sendbuf));
             send(client->base.fd, sendbuf, sendlen, MSG_NOSIGNAL);
             //MSG_DUMP_MT("SEND: ", sendbuf, sendlen);
             break;
         case IDIOT_PONG:
-            break;
         case IDIOT_CONNECT:
-            outpacket = packetMessageInit(sendbuf, sizeof(sendbuf));
-            sendlen = packetConnectFill(outpacket, client->id);
-            packetCRCFill(outpacket);
-
-            send(client->base.fd, sendbuf, sendlen, MSG_NOSIGNAL);
             break;
         default:
             mtc_mt_warn("unsupport idot packet %d", ipacket->idiot);
@@ -168,7 +98,7 @@ static bool _parse_recv(NetClientNode *client, uint8_t *recvbuf, size_t recvlen)
             if (recvlen < packet->length) {
                 if (packet->length > CONTRL_PACKET_MAX_LEN) {
                     /* 玩不起 */
-                    clientDrop(client);
+                    binaryDrop(client);
                     return false;
                 }
 
@@ -184,7 +114,7 @@ static bool _parse_recv(NetClientNode *client, uint8_t *recvbuf, size_t recvlen)
             }
         } else {
             /* not my bussiness */
-            clientDrop(client);
+            binaryDrop(client);
             return false;
         }
     }
@@ -197,13 +127,12 @@ static bool _parse_recv(NetClientNode *client, uint8_t *recvbuf, size_t recvlen)
 #undef PARTLY_PACKET
 }
 
-void clientInit()
+void binaryInit()
 {
     if (!m_recvbuf) m_recvbuf = mos_calloc(1, CONTRL_PACKET_MAX_LEN);
-    if (!m_clients) mlist_init(&m_clients, NULL);
 }
 
-bool clientRecv(int sfd, NetClientNode *client)
+bool binaryRecv(int sfd, NetBinaryNode *client)
 {
     int rv;
 
@@ -221,7 +150,7 @@ bool clientRecv(int sfd, NetClientNode *client)
                     break;
                 } else {
                     mtc_mt_err("%d error occurred %s", sfd, strerror(errno));
-                    clientDrop(client);
+                    binaryDrop(client);
                     return false;
                 }
             } else if (rv == 0) {
@@ -229,7 +158,7 @@ bool clientRecv(int sfd, NetClientNode *client)
 
                 /* 如果用户发完包马上 close 掉自己，是处理不到他发包内容的 */
                 mtc_mt_dbg("%d closed", sfd);
-                clientDrop(client);
+                binaryDrop(client);
                 return false;
             } else recvlen += rv;
         }
@@ -243,7 +172,7 @@ bool clientRecv(int sfd, NetClientNode *client)
         /* 已收到部分老包 */
         if (client->recvlen > CONTRL_PACKET_MAX_LEN) {
             mtc_mt_err("unbeleiveable, packet too biiiiig");
-            clientDrop(client);
+            binaryDrop(client);
             return false;
         }
 
@@ -258,13 +187,13 @@ bool clientRecv(int sfd, NetClientNode *client)
                     break;
                 } else {
                     mtc_mt_err("%d error occurred %s", sfd, strerror(errno));
-                    clientDrop(client);
+                    binaryDrop(client);
                     return false;
                 }
             } else if (rv == 0) {
                 /* peer performded orderly shutdown */
                 mtc_mt_dbg("%d closed", sfd);
-                clientDrop(client);
+                binaryDrop(client);
                 return false;
             } else client->recvlen += rv;
         }
@@ -285,49 +214,17 @@ bool clientRecv(int sfd, NetClientNode *client)
  * 1. 已送往业务逻辑的客户端，由业务线程空闲时释放内存。
  * 2. 未送往业务逻辑的客户端，就地正法。
  */
-void clientDrop(NetClientNode *client)
+void binaryDrop(NetBinaryNode *client)
 {
     if (!client) return;
 
-    mtc_mt_dbg("drop client %s %d", client->id, client->base.fd);
-
-    client->dropped = true;
+    mtc_mt_dbg("drop client %d", client->base.fd);
 
     epoll_ctl(g_efd, EPOLL_CTL_DEL, client->base.fd, NULL);
     shutdown(client->base.fd, SHUT_RDWR);
     close(client->base.fd);
     client->base.fd = -1;
 
-    NetClientNode *lclient;
-    MLIST_ITERATE(m_clients, lclient) {
-        if (!strcmp(lclient->id, client->id)) {
-            mlist_delete(m_clients, _moon_i);
-            break;
-        }
-    }
-
-    if (mlist_length(client->bees) == 0) {
-        mlist_destroy(&client->channels);
-        mlist_destroy(&client->bees);
-        mos_free(client->buf);
-        mos_free(client);
-    }
-}
-
-void clientAdd(NetClientNode *client)
-{
-    if (m_clients && client) mlist_append(m_clients, client);
-}
-
-NetClientNode* clientMatch(char *clientid)
-{
-    NetClientNode *client;
-
-    if (!clientid) return NULL;
-
-    MLIST_ITERATE(m_clients, client) {
-        if (!strcmp(client->id, clientid)) return client;
-    }
-
-    return NULL;
+    mos_free(client->buf);
+    mos_free(client);
 }

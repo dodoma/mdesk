@@ -3,6 +3,7 @@
 #include "rpi.h"
 #include "net.h"
 #include "client.h"
+#include "binary.h"
 #include "timer.h"
 #include "bee.h"
 
@@ -65,6 +66,7 @@ int main(int argc, char *argv[])
     signal(SIGPIPE, SIG_IGN);
 
     clientInit();
+    binaryInit();
 
     err = beeStart();
     RETURN_V_NOK(err, 1);

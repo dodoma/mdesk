@@ -9,6 +9,7 @@
 typedef enum {
     IDIOT_PING = 101,
     IDIOT_PONG,
+    IDIOT_CONNECT,              /* contrl socket 申请 clientid */
     IDIOT_PLAY_STEP,
 } IDIOT_INDICATOR;
 
@@ -23,8 +24,10 @@ typedef enum {
 } FRAME_TYPE;
 
 typedef enum {
-    CMD_BROADCAST = 0,
-    CMD_STORE_LIST,
+    CMD_BROADCAST = 0,          /* (cpuid, port_contrl, port_binary) */
+    CMD_CONNECT,                /* server 返回、 binary socket 上报 clientid (clientid) */
+    CMD_SYNC,                   /* (filename, filelength(8 bytes) [file contents])  */
+    CMD_STORE_LIST,             /* () */
 } COMMAND_CMD;
 
 typedef enum {
@@ -87,6 +90,8 @@ MessagePacket* packetMessageInit(uint8_t *buf, size_t buflen);
  */
 size_t packetBroadcastFill(MessagePacket *packet,
                            const char *cpuid, uint16_t port_contrl, uint16_t port_binary);
+size_t packetConnectFill(MessagePacket *packet, const char *clientid);
+size_t packetBFileFill(MessagePacket *packet, const char *filename, uint64_t size);
 size_t packetACKFill(MessagePacket *packet, uint16_t seqnum, uint16_t command,
                      bool success, const char *errmsg);
 size_t packetResponseFill(MessagePacket *packet, uint16_t seqnum, uint16_t command,

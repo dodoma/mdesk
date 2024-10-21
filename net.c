@@ -5,6 +5,7 @@
 
 #include "net.h"
 #include "client.h"
+#include "binary.h"
 #include "global.h"
 #include "packet.h"
 
@@ -87,13 +88,13 @@ static void _timer_handler(int fd)
     }
 }
 
-static int _new_connection(int efd, int sfd, NetNodeType type)
+static int _new_connection(int efd, int sfd)
 {
     struct sockaddr_in clisa;
     socklen_t clilen = sizeof(struct sockaddr_in);
 
     NetClientNode *nitem = mos_calloc(1, sizeof(NetClientNode));
-    nitem->base.type = type;
+    nitem->base.type = NET_CLIENT_CONTRL;
     nitem->base.fd = accept(sfd, (struct sockaddr*)&clisa, &clilen);
     if(nitem->base.fd == -1) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -108,13 +109,53 @@ static int _new_connection(int efd, int sfd, NetNodeType type)
         return 0;
     }
 
-    mtc_mt_dbg("new connection on %d %d ==> %d", type, sfd, nitem->base.fd);
+    mtc_mt_dbg("new contrl connection on %d ==> %d", sfd, nitem->base.fd);
+
+    memset(nitem->id, 0x0, LEN_CLIENTID);
+    mstr_rand_word_fixlen(nitem->id, LEN_CLIENTID-1);
+    nitem->binary = NULL;
 
     mlist_init(&nitem->bees, NULL);
     mlist_init(&nitem->channels, NULL);
     nitem->buf = NULL;
     nitem->recvlen = 0;
     nitem->dropped = false;
+
+    struct epoll_event ev = {.data.ptr = nitem, .events = EPOLLIN | EPOLLET};
+    if (epoll_ctl(efd, EPOLL_CTL_ADD, nitem->base.fd, &ev) == -1)
+        mtc_mt_err("epoll add failure %s", strerror(errno));
+
+    clientAdd(nitem);
+
+    return 1;
+}
+
+static int _new_connection_binary(int efd, int sfd)
+{
+    struct sockaddr_in clisa;
+    socklen_t clilen = sizeof(struct sockaddr_in);
+
+    NetBinaryNode *nitem = mos_calloc(1, sizeof(NetBinaryNode));
+    nitem->base.type = NET_CLIENT_BINARY;
+    nitem->base.fd = accept(sfd, (struct sockaddr*)&clisa, &clilen);
+    if(nitem->base.fd == -1) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            mos_free(nitem);
+            return 0;
+        } else return -1;
+    }
+
+    if (fcntl(nitem->base.fd, F_SETFL, fcntl(nitem->base.fd, F_GETFL, 0) | O_NONBLOCK) != 0) {
+        close(nitem->base.fd);
+        mos_free(nitem);
+        return 0;
+    }
+
+    mtc_mt_dbg("new binary connection on %d ==> %d", sfd, nitem->base.fd);
+
+    nitem->contrl = NULL;
+    nitem->buf = NULL;
+    nitem->recvlen = 0;
 
     struct epoll_event ev = {.data.ptr = nitem, .events = EPOLLIN | EPOLLET};
     if (epoll_ctl(efd, EPOLL_CTL_ADD, nitem->base.fd, &ev) == -1)
@@ -264,7 +305,7 @@ MERR* netExposeME()
             switch (nitem->type) {
             case NET_CONTRL:
                 while (true) {
-                    rv = _new_connection(g_efd, nitem->fd, NET_CLIENT_CONTRL);
+                    rv = _new_connection(g_efd, nitem->fd);
                     if (rv < 0) {
                         return merr_raise(MERR_ASSERT, "new connection error %s", strerror(errno));
                     } else if (rv == 0) break;
@@ -272,7 +313,7 @@ MERR* netExposeME()
                 break;
             case NET_BINARY:
                 while (true) {
-                    rv = _new_connection(g_efd, nitem->fd, NET_CLIENT_BINARY);
+                    rv = _new_connection_binary(g_efd, nitem->fd);
                     if (rv < 0) {
                         return merr_raise(MERR_ASSERT, "new connection error %s", strerror(errno));
                     } else if (rv == 0) break;
@@ -289,7 +330,7 @@ MERR* netExposeME()
                 clientRecv(nitem->fd, (NetClientNode*)nitem);
                 break;
             case NET_CLIENT_BINARY:
-                //clientRecv(nitem->fd, (NetClientNode*)nitem);
+                binaryRecv(nitem->fd, (NetBinaryNode*)nitem);
                 break;
             default:
                 break;
@@ -311,8 +352,9 @@ void netNodeFree(NetNode *node)
 
     switch (node->type) {
     case NET_CLIENT_CONTRL:
-    case NET_CLIENT_BINARY:
         return clientDrop((NetClientNode*)node);
+    case NET_CLIENT_BINARY:
+        return binaryDrop((NetBinaryNode*)node);
     default:
         break;
     }
