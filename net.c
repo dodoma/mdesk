@@ -119,7 +119,7 @@ static int _new_connection(int efd, int sfd)
     mlist_init(&nitem->channels, NULL);
     nitem->buf = NULL;
     nitem->recvlen = 0;
-    nitem->dropped = false;
+    nitem->base.dropped = false;
 
     struct epoll_event ev = {.data.ptr = nitem, .events = EPOLLIN | EPOLLET};
     if (epoll_ctl(efd, EPOLL_CTL_ADD, nitem->base.fd, &ev) == -1)
@@ -156,6 +156,8 @@ static int _new_connection_binary(int efd, int sfd)
     nitem->contrl = NULL;
     nitem->buf = NULL;
     nitem->recvlen = 0;
+    nitem->in_business = false;
+    nitem->base.dropped = false;
 
     struct epoll_event ev = {.data.ptr = nitem, .events = EPOLLIN | EPOLLET};
     if (epoll_ctl(efd, EPOLL_CTL_ADD, nitem->base.fd, &ev) == -1)
@@ -184,8 +186,9 @@ MERR* netExposeME()
     struct itimerspec new_value;
     new_value.it_value.tv_sec = now.tv_sec + 1;
     new_value.it_value.tv_nsec = now.tv_nsec;
-    new_value.it_interval.tv_sec = 0;
-    new_value.it_interval.tv_nsec = 100000000ul;
+    new_value.it_interval.tv_sec = 1;
+    //new_value.it_interval.tv_nsec = 100000000ul;
+    new_value.it_interval.tv_nsec = 0;
     if (timerfd_settime(fd, TFD_TIMER_ABSTIME, &new_value, NULL) == -1)
         return merr_raise(MERR_ASSERT, "timer set time");
 
@@ -382,9 +385,10 @@ bool SSEND(int fd, uint8_t *buf, size_t len)
         MSG_DUMP_MT(g_dumpsend, "SEND: ", buf + count, rv);
 
         if (rv == -1) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK)
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                usleep(100000);
                 continue;
-            else {
+            } else {
                 mtc_mt_err("send failure %s", strerror(errno));
                 return false;
             }

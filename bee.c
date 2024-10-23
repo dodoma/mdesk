@@ -175,7 +175,7 @@ static void* _worker(void *arg)
 
                 NetClientNode *client;
                 MLIST_ITERATE(be->users, client) {
-                    if (client->dropped) {
+                    if (client->base.dropped) {
                         mlist_delete_item(client->bees, be, _bee_compare);
 
                         mlist_delete(be->users, _moon_i);
@@ -301,7 +301,7 @@ bool channelEmpty(Channel *slot)
 
     NetClientNode *client;
     MLIST_ITERATE(slot->users, client) {
-        if (!client->dropped) return false;
+        if (!client->base.dropped) return false;
     }
 
     return true;
@@ -346,7 +346,7 @@ void channelSend(Channel *slot, uint8_t *bufsend, size_t sendlen)
 
     NetClientNode *client;
     MLIST_ITERATE(slot->users, client) {
-        if (!client->dropped) SSEND(client->base.fd, bufsend, sendlen);
+        if (!client->base.dropped) SSEND(client->base.fd, bufsend, sendlen);
     }
 }
 

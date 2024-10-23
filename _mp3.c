@@ -217,7 +217,7 @@ bool mp3_md5_get(const char *filename, char id[LEN_DOMMEID])
     return true;
 }
 
-static bool _seek_cover(const uint8_t *buf, size_t len, uint8_t **outmem, size_t *outlen)
+static bool _seek_cover(const uint8_t *buf, size_t len, char **mime, uint8_t **outmem, size_t *outlen)
 {
 	const char id3v2_3[] = "TIT2TALBTPE1TRCKTYERTLENAPICTPE2UNKN";  //id3, v2, spec 3 uses 4 byte ID
 	const char id3v2_2[] = "TT2 TAL TP1 TRK TYE TLE PIC TP2 UNK ";  //id3, v2, spec 2 uses 3 byte ID
@@ -250,6 +250,7 @@ static bool _seek_cover(const uint8_t *buf, size_t len, uint8_t **outmem, size_t
             uint32_t infolen = 0;
 
             /* mime */
+            if (mime) *mime = (char*)pos;
             while (infolen < 30 && *pos != '\0') {
                 pos++;
                 infolen++;
@@ -285,7 +286,8 @@ static bool _seek_cover(const uint8_t *buf, size_t len, uint8_t **outmem, size_t
             if (infolen < needtoread) {
                 *outmem = (uint8_t*)pos;
                 *outlen = needtoread - infolen;
-                return true;
+                if (*outlen < len) return true;
+                else return false;
             } else return false;
         } else {
             pos += (frame_size + header_size);
@@ -296,19 +298,20 @@ static bool _seek_cover(const uint8_t *buf, size_t len, uint8_t **outmem, size_t
     return false;
 }
 
-mp3dec_map_info_t* mp3_cover_open(const char *filename, uint8_t **imgbuf, size_t *imgsize)
+mp3dec_map_info_t* mp3_cover_open(char *filename, char **mime, uint8_t **imgbuf, size_t *imgsize)
 {
     if (!filename || !imgsize || !imgbuf) return NULL;
 
     mp3dec_map_info_t *mapinfo = mos_calloc(1, sizeof(mp3dec_map_info_t));
     if (mp3dec_open_file(filename, mapinfo) != 0) {
-        mtc_mt_warn("open %s failure", filename);
+        mtc_mt_warn("open %s failure %s", filename, strerror(errno));
         mos_free(mapinfo);
         return NULL;
     }
 
-    if (!_seek_cover(mapinfo->buffer, mapinfo->size, imgbuf, imgsize)) {
+    if (!_seek_cover(mapinfo->buffer, mapinfo->size, mime, imgbuf, imgsize)) {
         mtc_mt_warn("%s cover empty", filename);
+        mp3dec_close_file(mapinfo);
         mos_free(mapinfo);
         return NULL;
     }

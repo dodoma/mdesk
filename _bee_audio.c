@@ -535,6 +535,7 @@ static bool _play_raw(AudioEntry *me, char *filename, DommeFile *mfile)
     ret = mp3dec_iterate_buf(track->file.buffer, track->file.size, _iterate_info, &track->info);
     if (ret != 0) {
         mtc_mt_err("load info %s failure", filename);
+        mp3dec_close_file(&track->file);
         return false;
     }
 
@@ -580,9 +581,11 @@ static bool _play_raw(AudioEntry *me, char *filename, DommeFile *mfile)
     if (mp3dec_iterate_buf(track->file.buffer + track->offset,
                            track->file.size - track->offset, _iterate_callback, me) != 0) {
         mtc_mt_err("play buffer error failure");
+        mp3dec_close_file(&track->file);
         return false;
     }
 
+    mp3dec_close_file(&track->file);
     return true;
 }
 
@@ -814,6 +817,8 @@ void audio_stop(BeeEntry *be)
 
     pthread_cancel(me->indexer);
     pthread_join(me->indexer, NULL);
+
+    pthread_mutex_destroy(&me->lock);
 
     mos_free(me->track);
     mlist_destroy(&me->plans);

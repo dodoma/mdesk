@@ -5,6 +5,7 @@
 #include "global.h"
 #include "net.h"
 #include "client.h"
+#include "bee.h"
 #include "binary.h"
 #include "packet.h"
 
@@ -33,8 +34,6 @@ static bool _parse_packet(NetBinaryNode *client, MessagePacket *packet)
                 contrl->binary = client;
                 client->contrl = contrl;
             }
-        //} else if (packet->command == CMD_SYNC) {
-            /* 发送文件 */
         }
         break;
     default:
@@ -60,16 +59,14 @@ static bool _parse_recv(NetBinaryNode *client, uint8_t *recvbuf, size_t recvlen)
     /* idiot packet ? */
     if (recvlen < LEN_IDIOT) PARTLY_PACKET;
 
-    uint8_t sendbuf[256] = {0};
-    size_t sendlen = 0;
+    BeeEntry *be;
     IdiotPacket *ipacket = packetIdiotGot(recvbuf, recvlen);
     if (ipacket) {
         switch (ipacket->idiot) {
         case IDIOT_PING:
-            //mtc_mt_dbg("ping received");
-            sendlen = packetPONGFill(sendbuf, sizeof(sendbuf));
-            send(client->base.fd, sendbuf, sendlen, MSG_NOSIGNAL);
-            //MSG_DUMP_MT("SEND: ", sendbuf, sendlen);
+            /* 此时回 PONG 包可能会破坏 binary client 在 storage 中的回包顺序，造成客户端报 packet error */
+            be = beeFind(FRAME_STORAGE);
+            if (be) binaryPush(be, SYNC_PONG, client);
             break;
         case IDIOT_PONG:
         case IDIOT_CONNECT:
@@ -94,7 +91,7 @@ static bool _parse_recv(NetBinaryNode *client, uint8_t *recvbuf, size_t recvlen)
         if (recvlen < LEN_HEADER + 4) PARTLY_PACKET;
 
         MessagePacket *packet = (MessagePacket*)recvbuf;
-        if (packet->sof == PACKET_SOF && packet->idiot == 1) {
+        if (packet && packet->sof == PACKET_SOF && packet->idiot == 1) {
             if (recvlen < packet->length) {
                 if (packet->length > CONTRL_PACKET_MAX_LEN) {
                     /* 玩不起 */
@@ -218,13 +215,19 @@ void binaryDrop(NetBinaryNode *client)
 {
     if (!client) return;
 
-    mtc_mt_dbg("drop client %d", client->base.fd);
+    mtc_mt_dbg("drop client %p %d", client, client->base.fd);
+
+    client->base.dropped = true;
 
     epoll_ctl(g_efd, EPOLL_CTL_DEL, client->base.fd, NULL);
     shutdown(client->base.fd, SHUT_RDWR);
     close(client->base.fd);
     client->base.fd = -1;
 
-    mos_free(client->buf);
-    mos_free(client);
+    if (client->contrl) client->contrl->binary = NULL;
+
+    if (!client->in_business) {
+        mos_free(client->buf);
+        mos_free(client);
+    }
 }

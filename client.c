@@ -132,7 +132,7 @@ static bool _parse_recv(NetClientNode *client, uint8_t *recvbuf, size_t recvlen)
             //mtc_mt_dbg("ping received");
             netHornPing();
             sendlen = packetPONGFill(sendbuf, sizeof(sendbuf));
-            send(client->base.fd, sendbuf, sendlen, MSG_NOSIGNAL);
+            SSEND(client->base.fd, sendbuf, sendlen);
             //MSG_DUMP_MT("SEND: ", sendbuf, sendlen);
             break;
         case IDIOT_PONG:
@@ -142,6 +142,7 @@ static bool _parse_recv(NetClientNode *client, uint8_t *recvbuf, size_t recvlen)
             sendlen = packetConnectFill(outpacket, client->id);
             packetCRCFill(outpacket);
 
+            //SSEND((NetNode*)client, sendbuf, sendlen);
             send(client->base.fd, sendbuf, sendlen, MSG_NOSIGNAL);
             break;
         default:
@@ -164,7 +165,7 @@ static bool _parse_recv(NetClientNode *client, uint8_t *recvbuf, size_t recvlen)
         if (recvlen < LEN_HEADER + 4) PARTLY_PACKET;
 
         MessagePacket *packet = (MessagePacket*)recvbuf;
-        if (packet->sof == PACKET_SOF && packet->idiot == 1) {
+        if (packet && packet->sof == PACKET_SOF && packet->idiot == 1) {
             if (recvlen < packet->length) {
                 if (packet->length > CONTRL_PACKET_MAX_LEN) {
                     /* 玩不起 */
@@ -289,14 +290,16 @@ void clientDrop(NetClientNode *client)
 {
     if (!client) return;
 
-    mtc_mt_dbg("drop client %s %d", client->id, client->base.fd);
+    mtc_mt_dbg("drop client %s %p %d", client->id, client, client->base.fd);
 
-    client->dropped = true;
+    client->base.dropped = true;
 
     epoll_ctl(g_efd, EPOLL_CTL_DEL, client->base.fd, NULL);
     shutdown(client->base.fd, SHUT_RDWR);
     close(client->base.fd);
     client->base.fd = -1;
+
+    if (client->binary) client->binary->contrl = NULL;
 
     NetClientNode *lclient;
     MLIST_ITERATE(m_clients, lclient) {

@@ -179,7 +179,10 @@ MERR* dommeLoadFromFile(char *filename, DommeStore *plan)
     mdf_init(&dbnode);
 
     err = mdf_mpack_import_file(dbnode, filename);
-    if (err) return merr_pass(err);
+    if (err) {
+        mdf_destroy(&dbnode);
+        return merr_pass(err);
+    }
     //MDF_TRACE_MT(dbnode);
 
     MDF *cnode = mdf_node_child(dbnode);

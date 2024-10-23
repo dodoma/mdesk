@@ -7,6 +7,14 @@
  * 诸如读写音频文件、建立索引、文件比对、硬件设置、读写数据库、播放控制等，分成了不同的业务线程处理
  */
 
+typedef enum {
+    SYNC_RAWFILE = 0,
+    SYNC_TRACK_COVER,
+    SYNC_ARTIST_COVER,
+    SYNC_ALBUM_COVER,
+    SYNC_PONG,
+} SYNC_TYPE;
+
 typedef struct queue_entry {
     uint16_t seqnum;
     uint16_t command;
@@ -71,5 +79,7 @@ void queueEntryFree(void *p);
 
 QueueEntry* queueEntryGet(QueueManager *queue);
 void queueEntryPush(QueueManager *queue, QueueEntry *qe);
+
+void binaryPush(BeeEntry *be, SYNC_TYPE stype, NetBinaryNode *client);
 
 #endif  /* ___BEE_H__ */

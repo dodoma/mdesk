@@ -17,6 +17,7 @@ typedef enum {
 typedef struct {
     int fd;
     NetNodeType type;
+    bool dropped;
 } NetNode;
 
 typedef struct {
@@ -36,8 +37,6 @@ typedef struct {
 
     MLIST *bees;                /* list of BeeEntry* */
     MLIST *channels;            /* list of Channel* */
-
-    bool dropped;
 } NetClientNode;
 
 typedef struct _net_binary_node {
@@ -46,6 +45,8 @@ typedef struct _net_binary_node {
 
     uint8_t *buf;               /* receive buffer */
     ssize_t recvlen;
+
+    bool in_business;
 } NetBinaryNode;
 
 MERR* netExposeME();

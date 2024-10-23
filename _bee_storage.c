@@ -1,8 +1,3 @@
-typedef enum {
-    SYNC_RAWFILE = 0,
-    SYNC_TRACK_COVER,
-} SYNC_TYPE;
-
 typedef struct {
     BeeEntry base;
 
@@ -19,14 +14,31 @@ typedef struct {
     char *storename;
     char *storepath;
 
-    MLIST *synclist;
+    MLIST *synclist;            /* list of struct reqitem* */
+    MLIST *clients;             /* list of NetBinaryNode* */
 } StorageEntry;
 
 struct reqitem {
-    char *name;
     SYNC_TYPE type;
+    char *name;
+    char *id;
+    char *artist;
+    char *album;
+
     NetBinaryNode *client;
 };
+
+static void _client_destroy(void *p)
+{
+    if (!p) return;
+
+    NetBinaryNode *client = (NetBinaryNode*)p;
+
+    mtc_mt_dbg("user %p left", client);
+
+    mos_free(client->buf);
+    mos_free(client);
+}
 
 MDF* _store_node(StorageEntry *me, char *name)
 {
@@ -50,16 +62,18 @@ void reqitem_free(void *arg)
 
     struct reqitem *item = (struct reqitem*)arg;
     mos_free(item->name);
+    mos_free(item->id);
+    mos_free(item->artist);
+    mos_free(item->album);
     mos_free(item);
 }
 
 bool _push_raw(StorageEntry *me, struct reqitem *item)
 {
-    mtc_mt_dbg("push %s to %d", item->name, item->client->base.fd);
-
     NetBinaryNode *client = item->client;
+    if (client->base.fd <= 0 || !item->name || !me->storepath) return false;
 
-    if (client->base.fd <= 0 || !me->storepath) return false;
+    mtc_mt_dbg("push %s to %d", item->name, item->client->base.fd);
 
     char filename[PATH_MAX] = {0};
     snprintf(filename, sizeof(filename), "%s%s%s", me->libroot, me->storepath, item->name);
@@ -100,28 +114,28 @@ bool _push_raw(StorageEntry *me, struct reqitem *item)
     return true;
 }
 
-bool _push_cover(StorageEntry *me, struct reqitem *item)
+bool _push_track_cover(StorageEntry *me, struct reqitem *item)
 {
-    mtc_mt_dbg("push %s to %d", item->name, item->client->base.fd);
-
     NetBinaryNode *client = item->client;
+    if (client->base.fd <= 0 || !item->id || !me->storepath) return false;
 
-    if (client->base.fd <= 0 || !me->storepath) return false;
+    mtc_mt_dbg("push %s to %d", item->id, item->client->base.fd);
 
-    DommeFile *mfile = dommeGetFile(me->plan, item->name);
+    DommeFile *mfile = dommeGetFile(me->plan, item->id);
     if (mfile) {
         uint8_t *imgbuf;
+        char *mime;
         size_t coversize;
         char filename[PATH_MAX] = {0};
         snprintf(filename, sizeof(filename), "%s%s%s%s",
                  me->libroot, me->storepath, mfile->dir, mfile->name);
 
-        mp3dec_map_info_t *mapinfo = mp3_cover_open(filename, &imgbuf, &coversize);
+        mp3dec_map_info_t *mapinfo = mp3_cover_open(filename, &mime, &imgbuf, &coversize);
         if (!mapinfo) return false;
 
         /* CMD_SYNC */
         char nameWithPath[PATH_MAX];
-        snprintf(nameWithPath, sizeof(nameWithPath), "assets/cover/%s.jpg", item->name);
+        snprintf(nameWithPath, sizeof(nameWithPath), "assets/cover/%s", item->id);
 
         uint8_t bufsend[LEN_PACKET_NORMAL];
         MessagePacket *packet = packetMessageInit(bufsend, LEN_PACKET_NORMAL);
@@ -134,7 +148,121 @@ bool _push_cover(StorageEntry *me, struct reqitem *item)
         SSEND(client->base.fd, imgbuf, coversize);
 
         mp3_cover_close(mapinfo);
-    } else mtc_mt_warn("%s not exist", item->name);
+
+        return true;
+    } else mtc_mt_warn("%s not exist", item->id);
+
+    return false;
+}
+
+bool _push_artist_cover(StorageEntry *me, struct reqitem *item)
+{
+    NetBinaryNode *client = item->client;
+    if (client->base.fd <= 0 || !item->artist || !me->storepath) return false;
+
+    mtc_mt_dbg("push %s to %d", item->artist, item->client->base.fd);
+
+    DommeArtist *artist = artistFind(me->plan->artists, item->artist);
+    DommeAlbum *disk;
+    DommeFile *mfile;
+    if (artist) {
+        MLIST_ITERATE(artist->albums, disk) {
+            MLIST_ITERATEB(disk->tracks, mfile) {
+                uint8_t *imgbuf;
+                char *mime;
+                size_t coversize;
+                char filename[PATH_MAX] = {0};
+                snprintf(filename, sizeof(filename), "%s%s%s%s",
+                         me->libroot, me->storepath, mfile->dir, mfile->name);
+
+                mp3dec_map_info_t *mapinfo = mp3_cover_open(filename, &mime, &imgbuf, &coversize);
+                if (!mapinfo) continue;
+
+                /* CMD_SYNC */
+                char nameWithPath[PATH_MAX];
+                snprintf(nameWithPath, sizeof(nameWithPath), "assets/cover/%s", item->artist);
+
+                uint8_t bufsend[LEN_PACKET_NORMAL];
+                MessagePacket *packet = packetMessageInit(bufsend, LEN_PACKET_NORMAL);
+                size_t sendlen = packetBFileFill(packet, nameWithPath, coversize);
+                packetCRCFill(packet);
+
+                SSEND(client->base.fd, bufsend, sendlen);
+
+                /* file contents */
+                SSEND(client->base.fd, imgbuf, coversize);
+
+                mp3_cover_close(mapinfo);
+
+                return true;
+            }
+        }
+    } else mtc_mt_warn("can't find %s", item->artist);
+
+    mtc_mt_warn("%s don't have cover", item->artist);
+
+    return true;
+}
+
+bool _push_album_cover(StorageEntry *me, struct reqitem *item)
+{
+    NetBinaryNode *client = item->client;
+    if (client->base.fd <= 0 || !item->artist || !item->album || !me->storepath) return false;
+
+    mtc_mt_dbg("push %s %s to %d", item->artist, item->album, item->client->base.fd);
+
+    DommeArtist *artist = artistFind(me->plan->artists, item->artist);
+    DommeFile *mfile;
+    if (artist) {
+        DommeAlbum *disk = albumFind(artist->albums, item->album);
+        if (disk) {
+            MLIST_ITERATE(disk->tracks, mfile) {
+                uint8_t *imgbuf;
+                char *mime;
+                size_t coversize;
+                char filename[PATH_MAX] = {0};
+                snprintf(filename, sizeof(filename), "%s%s%s%s",
+                         me->libroot, me->storepath, mfile->dir, mfile->name);
+
+                mp3dec_map_info_t *mapinfo = mp3_cover_open(filename, &mime, &imgbuf, &coversize);
+                if (!mapinfo) continue;
+
+                /* CMD_SYNC */
+                char nameWithPath[PATH_MAX];
+                snprintf(nameWithPath, sizeof(nameWithPath), "assets/cover/%s_%s",
+                         item->artist, item->album);
+
+                uint8_t bufsend[LEN_PACKET_NORMAL];
+                MessagePacket *packet = packetMessageInit(bufsend, LEN_PACKET_NORMAL);
+                size_t sendlen = packetBFileFill(packet, nameWithPath, coversize);
+                packetCRCFill(packet);
+
+                SSEND(client->base.fd, bufsend, sendlen);
+
+                /* file contents */
+                SSEND(client->base.fd, imgbuf, coversize);
+
+                mp3_cover_close(mapinfo);
+
+                return true;
+            }
+        } else mtc_mt_warn("can't find album %s", item->album);
+    } else mtc_mt_warn("can't find artist %s", item->artist);
+
+    mtc_mt_warn("%s don't have cover", item->artist);
+    return true;
+}
+
+bool _push_pong(StorageEntry *me, struct reqitem *item)
+{
+    NetBinaryNode *client = item->client;
+    if (client->base.fd <= 0) return false;
+
+    mtc_mt_dbg("push PONG to %d", item->client->base.fd);
+
+    uint8_t sendbuf[LEN_IDIOT];
+    packetPONGFill(sendbuf, LEN_IDIOT);
+    SSEND(client->base.fd, sendbuf, LEN_IDIOT);
 
     return true;
 }
@@ -142,6 +270,7 @@ bool _push_cover(StorageEntry *me, struct reqitem *item)
 void* _pusher(void *arg)
 {
     StorageEntry *me = (StorageEntry*)arg;
+    uint8_t idle_count = 0;
     int rv = 0;
 
     int loglevel = mtc_level_str2int(mdf_get_value(g_config, "trace.worker", "debug"));
@@ -159,6 +288,20 @@ void* _pusher(void *arg)
         while (mlist_length(me->synclist) == 0 &&
                (rv = pthread_cond_timedwait(&me->cond, &me->lock, &timeout)) == ETIMEDOUT) {
             timeout.tv_sec += 1;
+
+            if (++idle_count >= 3) {
+                mtc_mt_noise("check my users in freetime");
+
+                idle_count = 0;
+
+                NetBinaryNode *client;
+                MLIST_ITERATE(me->clients, client) {
+                    if (client->base.dropped) {
+                        mlist_delete(me->clients, _moon_i);
+                        _moon_i--;
+                    }
+                }
+            }
 
             if (!me->running) break;
         }
@@ -179,12 +322,23 @@ void* _pusher(void *arg)
 
         if (!item) continue;
 
+        idle_count = 0;
+
         switch (item->type) {
         case SYNC_RAWFILE:
             _push_raw(me, item);
             break;
         case SYNC_TRACK_COVER:
-            _push_cover(me, item);
+            _push_track_cover(me, item);
+            break;
+        case SYNC_ARTIST_COVER:
+            _push_artist_cover(me, item);
+            break;
+        case SYNC_ALBUM_COVER:
+            _push_album_cover(me, item);
+            break;
+        case SYNC_PONG:
+            _push_pong(me, item);
             break;
         default:
             break;
@@ -196,9 +350,10 @@ void* _pusher(void *arg)
     return NULL;
 }
 
-void _push(StorageEntry *me, const char *name, SYNC_TYPE stype, NetBinaryNode *client)
+void _push(StorageEntry *me, char *name, char *id, char *artist, char *album,
+           SYNC_TYPE stype, NetBinaryNode *client)
 {
-    if (!me || !name) return;
+    if (!me) return;
 
     if (!client) {
         mtc_mt_warn("%s client null", name);
@@ -206,14 +361,30 @@ void _push(StorageEntry *me, const char *name, SYNC_TYPE stype, NetBinaryNode *c
     }
 
     struct reqitem *item = (struct reqitem*)mos_calloc(1, sizeof(struct reqitem));
-    item->name = strdup(name);
+    if (name)   item->name   = strdup(name);
+    if (id)     item->id     = strdup(id);
+    if (artist) item->artist = strdup(artist);
+    if (album)  item->album  = strdup(album);
     item->client = client;
     item->type = stype;
 
     pthread_mutex_lock(&me->lock);
+    if (!client->in_business) {
+        client->in_business = true;
+        mlist_append(me->clients, client);
+    }
     mlist_append(me->synclist, item);
     pthread_cond_signal(&me->cond);
     pthread_mutex_unlock(&me->lock);
+}
+
+void binaryPush(BeeEntry *be, SYNC_TYPE stype, NetBinaryNode *client)
+{
+    if (!be || !client) return;
+
+    StorageEntry *me = (StorageEntry*)be;
+
+    _push(me, NULL, NULL, NULL, NULL, stype, client);
 }
 
 bool storage_process(BeeEntry *be, QueueEntry *qe)
@@ -263,7 +434,7 @@ bool storage_process(BeeEntry *be, QueueEntry *qe)
 
                 SSEND(qe->client->base.fd, qe->client->bufsend, sendlen);
 
-                _push(me, "music.db", SYNC_RAWFILE, qe->client->binary);
+                _push(me, "music.db", NULL, NULL, NULL, SYNC_RAWFILE, qe->client->binary);
             } else {
                 /* 文件没更新 */
                 MessagePacket *packet = packetMessageInit(qe->client->bufsend, LEN_PACKET_NORMAL);
@@ -277,10 +448,14 @@ bool storage_process(BeeEntry *be, QueueEntry *qe)
     break;
     case CMD_SYNC_PULL:
     {
-        char *name = mdf_get_value(qe->nodein, "name", NULL);
+        char *name   = mdf_get_value(qe->nodein, "name", NULL);
+        char *id     = mdf_get_value(qe->nodein, "id", NULL);
+        char *artist = mdf_get_value(qe->nodein, "artist", NULL);
+        char *album  = mdf_get_value(qe->nodein, "album", NULL);
+
         SYNC_TYPE type = mdf_get_int_value(qe->nodein, "type", SYNC_RAWFILE);
 
-        if (name) _push(me, name, type, qe->client->binary);
+        _push(me, name, id, artist, album, type, qe->client->binary);
     }
     break;
     default:
@@ -300,9 +475,12 @@ void storage_stop(BeeEntry *be)
     pthread_cancel(me->worker);
     pthread_join(me->worker, NULL);
 
+    pthread_mutex_destroy(&me->lock);
+
     if (me->plan) dommeStoreFree(me->plan);
     mdf_destroy(&me->storeconfig);
     mlist_destroy(&me->synclist);
+    mlist_destroy(&me->clients);
 }
 
 BeeEntry* _start_storage()
@@ -327,6 +505,7 @@ BeeEntry* _start_storage()
     me->storename = NULL;
     me->storepath = NULL;
     mlist_init(&me->synclist, reqitem_free);
+    mlist_init(&me->clients, _client_destroy);
 
     me->running = true;
     pthread_mutexattr_t attr;
