@@ -162,6 +162,7 @@ static void* _index_music(void *arg)
 
     char stitle[LEN_ID3_STRING], sartist[LEN_ID3_STRING], salbum[LEN_ID3_STRING];
     char syear[LEN_ID3_STRING], strack[LEN_ID3_STRING];
+    mp3dec_map_info_t map_info;
     while (filename) {
         mfile = NULL;
         memset(stitle,  0x0, sizeof(stitle));
@@ -175,22 +176,24 @@ static void* _index_music(void *arg)
             goto nextone;
         }
 
-        if (mp3dec_detect(filename) == 0) {
-            /* title, sn, artist, album */
-            if (mp3_id3_get(filename, stitle, sartist, salbum, syear, strack)) {
-                mfile = mos_calloc(1, sizeof(DommeFile));
-                mp3_md5_get(filename, mfile->id);
-                mfile->dir = fpath;
-                mfile->name = strdup(fname);
-                mfile->title = strdup(stitle);
-                mfile->sn = atoi(strack);
-                mfile->touched = false;
+        if (mp3dec_open_file(filename, &map_info) == 0) {
+            if (mp3dec_detect_buf(map_info.buffer, map_info.size) == 0) {
+                /* title, sn, artist, album */
+                if (mp3_id3_get_buf(map_info.buffer, map_info.size,
+                                    stitle, sartist, salbum, syear, strack)) {
+                    mfile = mos_calloc(1, sizeof(DommeFile));
+                    mp3_md5_get_buf(map_info.buffer, map_info.size, mfile->id);
+                    mfile->dir = fpath;
+                    mfile->name = strdup(fname);
+                    mfile->title = strdup(stitle);
+                    mfile->sn = atoi(strack);
+                    mfile->touched = false;
 
-                mtc_mt_noise("%s %s %s %s %s", mfile->id, sartist, stitle, salbum, strack);
-            } else mtc_mt_dbg("%s not valid mp3 file", filename);
-        //} else if (apedec_detect(filename) == 0) {
-        } else {
-            mtc_mt_warn("%s not music", filename);
+                    mtc_mt_noise("%s %s %s %s %s", mfile->id, sartist, stitle, salbum, strack);
+                } else mtc_mt_dbg("%s not valid mp3 file", filename);
+            } else mtc_mt_warn("%s not music", filename);
+
+            mp3dec_close_file(&map_info);
         }
 
     nextone:

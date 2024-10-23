@@ -192,6 +192,18 @@ bool mp3_id3_get(const char *filename,
     return ret;
 }
 
+bool mp3_id3_get_buf(const uint8_t *buffer, size_t buf_size,
+                     char *title, char *artist, char *album, char *year, char *track)
+{
+    bool ret = false;
+
+    if (_info_get_id3v2(buffer, buf_size, title, artist, album, year, track))
+        ret = true;
+    else ret = _info_get_id3v1(buffer, buf_size, title, artist, album, year, track);
+
+    return ret;
+}
+
 bool mp3_md5_get(const char *filename, char id[LEN_DOMMEID])
 {
     mp3dec_map_info_t map_info;
@@ -213,6 +225,22 @@ bool mp3_md5_get(const char *filename, char id[LEN_DOMMEID])
     mstr_tolower(id);
 
     mp3dec_close_file(&map_info);
+
+    return true;
+}
+
+bool mp3_md5_get_buf(const uint8_t *buffer, size_t buf_size, char id[LEN_DOMMEID])
+{
+    memset(id, 0x0, LEN_DOMMEID);
+
+    /* md5 string */
+    mp3dec_skip_id3(&buffer, &buf_size);
+    unsigned char sum[16];
+    mhash_md5_buf((unsigned char*)buffer, buf_size, sum);
+
+    /* TODO 只取16个字节中的前几个，出现了冲突再做处理 */
+    mstr_bin2hexstr(sum, (int)(LEN_DOMMEID-1)/2, id);
+    mstr_tolower(id);
 
     return true;
 }
