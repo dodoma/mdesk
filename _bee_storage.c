@@ -68,6 +68,45 @@ void reqitem_free(void *arg)
     mos_free(item);
 }
 
+bool _push_puppet(NetBinaryNode *client, const char *filename, const char *pupname)
+{
+    if (client->base.fd <= 0 || !filename || !pupname) return false;
+
+    mtc_mt_dbg("push %s to %d", filename, client->base.fd);
+
+    /*
+     * CMD_SYNC
+     */
+    struct stat fs;
+    if (stat(filename, &fs) == 0) {
+        uint8_t bufsend[LEN_PACKET_NORMAL];
+        MessagePacket *packet = packetMessageInit(bufsend, LEN_PACKET_NORMAL);
+        size_t sendlen = packetBFileFill(packet, pupname, fs.st_size);
+        packetCRCFill(packet);
+
+        SSEND(client->base.fd, bufsend, sendlen);
+    }
+
+    /*
+     * file contents
+     */
+    FILE *fp = fopen(filename, "rb");
+    if (!fp) {
+        mtc_mt_warn("open %s failure %s", filename, strerror(errno));
+        return false;
+    }
+
+    uint8_t buf[4096] = {0};
+    size_t len = 0;
+    while ((len = fread(buf, 1, sizeof(buf), fp)) > 0) {
+        SSEND(client->base.fd, buf, len);
+    }
+
+    fclose(fp);
+
+    return true;
+}
+
 bool _push_raw(StorageEntry *me, struct reqitem *item)
 {
     NetBinaryNode *client = item->client;
@@ -121,22 +160,24 @@ bool _push_track_cover(StorageEntry *me, struct reqitem *item)
 
     mtc_mt_dbg("push %s to %d", item->id, item->client->base.fd);
 
+    char nameWithPath[PATH_MAX] = {0}, filename[PATH_MAX] = {0};
+    snprintf(nameWithPath, sizeof(nameWithPath), "assets/cover/%s", item->id);
+
     DommeFile *mfile = dommeGetFile(me->plan, item->id);
     if (mfile) {
         uint8_t *imgbuf;
         char *mime;
         size_t coversize;
-        char filename[PATH_MAX] = {0};
         snprintf(filename, sizeof(filename), "%s%s%s%s",
                  me->libroot, me->storepath, mfile->dir, mfile->name);
 
         mp3dec_map_info_t *mapinfo = mp3_cover_open(filename, &mime, &imgbuf, &coversize);
-        if (!mapinfo) return false;
+        if (!mapinfo) {
+            snprintf(filename, sizeof(filename), "%s.avm/track_cover.jpg", me->libroot);
+            return _push_puppet(item->client, filename, nameWithPath);
+        }
 
         /* CMD_SYNC */
-        char nameWithPath[PATH_MAX];
-        snprintf(nameWithPath, sizeof(nameWithPath), "assets/cover/%s", item->id);
-
         uint8_t bufsend[LEN_PACKET_NORMAL];
         MessagePacket *packet = packetMessageInit(bufsend, LEN_PACKET_NORMAL);
         size_t sendlen = packetBFileFill(packet, nameWithPath, coversize);
@@ -162,6 +203,9 @@ bool _push_artist_cover(StorageEntry *me, struct reqitem *item)
 
     mtc_mt_dbg("push %s to %d", item->artist, item->client->base.fd);
 
+    char nameWithPath[PATH_MAX] = {0}, filename[PATH_MAX] = {0};
+    snprintf(nameWithPath, sizeof(nameWithPath), "assets/cover/%s", item->artist);
+
     DommeArtist *artist = artistFind(me->plan->artists, item->artist);
     DommeAlbum *disk;
     DommeFile *mfile;
@@ -171,7 +215,6 @@ bool _push_artist_cover(StorageEntry *me, struct reqitem *item)
                 uint8_t *imgbuf;
                 char *mime;
                 size_t coversize;
-                char filename[PATH_MAX] = {0};
                 snprintf(filename, sizeof(filename), "%s%s%s%s",
                          me->libroot, me->storepath, mfile->dir, mfile->name);
 
@@ -179,9 +222,6 @@ bool _push_artist_cover(StorageEntry *me, struct reqitem *item)
                 if (!mapinfo) continue;
 
                 /* CMD_SYNC */
-                char nameWithPath[PATH_MAX];
-                snprintf(nameWithPath, sizeof(nameWithPath), "assets/cover/%s", item->artist);
-
                 uint8_t bufsend[LEN_PACKET_NORMAL];
                 MessagePacket *packet = packetMessageInit(bufsend, LEN_PACKET_NORMAL);
                 size_t sendlen = packetBFileFill(packet, nameWithPath, coversize);
@@ -201,7 +241,8 @@ bool _push_artist_cover(StorageEntry *me, struct reqitem *item)
 
     mtc_mt_warn("%s don't have cover", item->artist);
 
-    return true;
+    snprintf(filename, sizeof(filename), "%s.avm/artist_cover.jpg", me->libroot);
+    return _push_puppet(item->client, filename, nameWithPath);
 }
 
 bool _push_album_cover(StorageEntry *me, struct reqitem *item)
@@ -210,6 +251,9 @@ bool _push_album_cover(StorageEntry *me, struct reqitem *item)
     if (client->base.fd <= 0 || !item->artist || !item->album || !me->storepath) return false;
 
     mtc_mt_dbg("push %s %s to %d", item->artist, item->album, item->client->base.fd);
+
+    char nameWithPath[PATH_MAX] = {0}, filename[PATH_MAX] = {0};
+    snprintf(nameWithPath, sizeof(nameWithPath), "assets/cover/%s_%s", item->artist, item->album);
 
     DommeArtist *artist = artistFind(me->plan->artists, item->artist);
     DommeFile *mfile;
@@ -220,7 +264,6 @@ bool _push_album_cover(StorageEntry *me, struct reqitem *item)
                 uint8_t *imgbuf;
                 char *mime;
                 size_t coversize;
-                char filename[PATH_MAX] = {0};
                 snprintf(filename, sizeof(filename), "%s%s%s%s",
                          me->libroot, me->storepath, mfile->dir, mfile->name);
 
@@ -228,10 +271,6 @@ bool _push_album_cover(StorageEntry *me, struct reqitem *item)
                 if (!mapinfo) continue;
 
                 /* CMD_SYNC */
-                char nameWithPath[PATH_MAX];
-                snprintf(nameWithPath, sizeof(nameWithPath), "assets/cover/%s_%s",
-                         item->artist, item->album);
-
                 uint8_t bufsend[LEN_PACKET_NORMAL];
                 MessagePacket *packet = packetMessageInit(bufsend, LEN_PACKET_NORMAL);
                 size_t sendlen = packetBFileFill(packet, nameWithPath, coversize);
@@ -250,7 +289,9 @@ bool _push_album_cover(StorageEntry *me, struct reqitem *item)
     } else mtc_mt_warn("can't find artist %s", item->artist);
 
     mtc_mt_warn("%s don't have cover", item->artist);
-    return true;
+
+    snprintf(filename, sizeof(filename), "%s.avm/disk_cover.jpg", me->libroot);
+    return _push_puppet(item->client, filename, nameWithPath);
 }
 
 bool _push_pong(StorageEntry *me, struct reqitem *item)
@@ -393,7 +434,7 @@ bool storage_process(BeeEntry *be, QueueEntry *qe)
     StorageEntry *me = (StorageEntry*)be;
 
     mtc_mt_dbg("process command %d", qe->command);
-    MDF_TRACE_MT(qe->nodein);
+    //MDF_TRACE_MT(qe->nodein);
 
     switch (qe->command) {
     /* 为减少网络传输，CMD_DB_MD5为同步前必传，用以指定后续同步文件之媒体库 */

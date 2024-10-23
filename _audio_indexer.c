@@ -199,29 +199,37 @@ static void* _index_music(void *arg)
     nextone:
         pthread_mutex_lock(&m_indexer_lock);
         if (mfile) {
-            artist = artistFind(plan->artists, sartist);
-            if (!artist) {
-                artist = artistCreate(sartist);
-                mlist_append(plan->artists, artist);
+            if (mhash_lookup(plan->mfiles, mfile->id)) {
+                /* TODO file length verify, and id crash process */
+                mtc_mt_dbg("%s already exist", filename);
+
+                remove(filename);
+                dommeFileFree(mfile->id, mfile);
+            } else {
+                artist = artistFind(plan->artists, sartist);
+                if (!artist) {
+                    artist = artistCreate(sartist);
+                    mlist_append(plan->artists, artist);
+                }
+                disk = albumFind(artist->albums, salbum);
+                if (!disk) {
+                    disk = albumCreate(salbum);
+                    disk->year = strdup(syear);
+                    mlist_append(artist->albums, disk);
+                    plan->count_album++;
+                }
+
+                mfile->artist = artist;
+                mfile->disk = disk;
+
+                mlist_append(disk->tracks, mfile);
+                artist->count_track++;
+
+                mhash_insert(plan->mfiles, mfile->id, mfile);
+                plan->count_track++;
+
+                indexcount++;
             }
-            disk = albumFind(artist->albums, salbum);
-            if (!disk) {
-                disk = albumCreate(salbum);
-                disk->year = strdup(syear);
-                mlist_append(artist->albums, disk);
-                plan->count_album++;
-            }
-
-            mfile->artist = artist;
-            mfile->disk = disk;
-
-            mlist_append(disk->tracks, mfile);
-            artist->count_track++;
-
-            mhash_insert(plan->mfiles, mfile->id, mfile);
-            plan->count_track++;
-
-            indexcount++;
         }
         filename = mlist_popx(arga->files);
         pthread_mutex_unlock(&m_indexer_lock);
