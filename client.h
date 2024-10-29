@@ -6,5 +6,6 @@ bool clientRecv(int sfd, NetClientNode *client);
 void clientDrop(NetClientNode *client);
 void clientAdd(NetClientNode *client);
 NetClientNode* clientMatch(char *clientid);
+bool clientOn();
 
 #endif  /* __CLIENT_H__ */

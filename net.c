@@ -10,12 +10,9 @@
 #include "packet.h"
 
 #define MAXEVENTS 512
-#define BROADCAST_PERIOD 5
-#define BROADCAST_TIMEOUT 5
+#define BROADCAST_PERIOD 1
 
 static bool dad_call_me_back = false;
-
-static NetHornNode *m_horn = NULL;
 
 static void _sig_exit(int sig)
 {
@@ -28,7 +25,7 @@ static bool _broadcast_me(void *data)
 {
     NetHornNode *nitem = (NetHornNode*)data;
 
-    if (g_ctime > nitem->ping && g_ctime - nitem->ping > BROADCAST_TIMEOUT) {
+    if (!clientOn()) {
         mtc_mt_noise("broadcast me");
 
         /* 长时间没收到客户端心跳了，广播自己 */
@@ -219,14 +216,12 @@ MERR* netExposeME()
     NetHornNode *nodehorn = mos_calloc(1, sizeof(NetHornNode));
     nodehorn->base.fd = fd;
     nodehorn->base.type = NET_HORN;
-    nodehorn->ping = 0;
     //ev.events = EPOLLIN | EPOLLET;
     //ev.data.ptr = nodehorn;
     //rv = epoll_ctl(g_efd, EPOLL_CTL_ADD, nodehorn->base.fd, &ev);
     //if(rv == -1) return merr_raise(MERR_ASSERT, "add fd failure");
 
     g_timers = timerAdd(g_timers, BROADCAST_PERIOD, true, nodehorn, _broadcast_me);
-    m_horn = nodehorn;
 
     /* fd contrl */
     fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -366,11 +361,6 @@ void netNodeFree(NetNode *node)
     close(node->fd);
 
     mos_free(node);
-}
-
-void netHornPing()
-{
-    if (m_horn) m_horn->ping = g_ctime;
 }
 
 bool SSEND(int fd, uint8_t *buf, size_t len)

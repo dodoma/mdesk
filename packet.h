@@ -40,6 +40,10 @@ typedef enum {
     CMD_PAUSE,
     CMD_RESUME,
     CMD_NEXT,
+    CMD_PREVIOUS,
+    CMD_DRAGTO,
+    CMD_SET_SHUFFLE,
+    CMD_SET_VOLUME,
     CMD_STORE_SWITCH,           /* 切换媒体库 */
 } COMMAND_AUDIO;
 

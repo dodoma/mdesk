@@ -130,7 +130,6 @@ static bool _parse_recv(NetClientNode *client, uint8_t *recvbuf, size_t recvlen)
         switch (ipacket->idiot) {
         case IDIOT_PING:
             //mtc_mt_dbg("ping received");
-            netHornPing();
             sendlen = packetPONGFill(sendbuf, sizeof(sendbuf));
             SSEND(client->base.fd, sendbuf, sendlen);
             //MSG_DUMP_MT("SEND: ", sendbuf, sendlen);
@@ -333,4 +332,14 @@ NetClientNode* clientMatch(char *clientid)
     }
 
     return NULL;
+}
+
+bool clientOn()
+{
+    NetClientNode *client;
+    MLIST_ITERATE(m_clients, client) {
+        if (!client->base.dropped) return true;
+    }
+
+    return false;
 }

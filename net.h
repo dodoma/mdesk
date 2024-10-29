@@ -23,7 +23,7 @@ typedef struct {
 typedef struct {
     NetNode base;
 
-    time_t ping;                /* last time when receive ping packet */
+    //time_t ping;                /* last time when receive ping packet */
 } NetHornNode;
 
 typedef struct {
@@ -52,7 +52,6 @@ typedef struct _net_binary_node {
 MERR* netExposeME();
 
 void netNodeFree(NetNode *node);
-void netHornPing();
 
 bool SSEND(int fd, uint8_t *buf, size_t len);
 

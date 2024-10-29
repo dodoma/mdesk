@@ -1,3 +1,21 @@
+static int _iterate_info(void *user_data, const uint8_t *frame, int frame_size,
+                         int free_format_bytes, size_t buf_size, uint64_t offset,
+                         mp3dec_frame_info_t *info)
+{
+    if (!frame) return 1;
+
+    AudioInfo *outinfo = (AudioInfo*)user_data;
+
+    outinfo->channels = info->channels;
+    outinfo->layer = info->layer;
+    outinfo->bps = info->bitrate_kbps;
+    outinfo->hz = info->hz;
+    outinfo->samples += hdr_frame_samples(frame);
+    //d->samples += mp3dec_decode_frame(d->mp3d, frame, frame_size, NULL, info);
+
+    return 0;
+}
+
 static int _dir_compare(const void *a, void *key)
 {
     MDF *node = (MDF*)a;
@@ -220,7 +238,7 @@ MERR* dommeLoadFromFile(char *filename, DommeStore *plan)
 
             MDF *song = mdf_get_child(artnode, "d");
             while (song) {
-                if (mdf_child_count(song, NULL) != 4) continue;
+                if (mdf_child_count(song, NULL) != 5) goto nextsong;
 
                 char *id = mdf_get_value(song, "[0]", NULL);
                 char *name = mdf_get_value(song, "[1]", NULL);
@@ -236,6 +254,7 @@ MERR* dommeLoadFromFile(char *filename, DommeStore *plan)
                 mfile->title = strdup(title);
 
                 mfile->sn = mdf_get_int_value(song, "[3]", 0);
+                mfile->length = mdf_get_int_value(song, "[4]", 0);
                 mfile->touched = false;
 
                 mfile->artist = artist;
@@ -247,6 +266,7 @@ MERR* dommeLoadFromFile(char *filename, DommeStore *plan)
                 mlist_append(disk->tracks, mfile);
                 artist->count_track++;
 
+            nextsong:
                 song = mdf_node_next(song);
             }
 
@@ -364,6 +384,7 @@ bool dommeStoreDumpFile(DommeStore *plan, char *filename)
         mdf_set_value(mnode, "1", mfile->name);
         mdf_set_value(mnode, "2", mfile->title);
         mdf_set_int_value(mnode, "3", mfile->sn);
+        mdf_set_int_value(mnode, "4", mfile->length);
 
         mdf_object_2_array(mnode, NULL);
         mdf_object_2_array(tnode, "d");

@@ -163,6 +163,7 @@ static void* _index_music(void *arg)
     char stitle[LEN_ID3_STRING], sartist[LEN_ID3_STRING], salbum[LEN_ID3_STRING];
     char syear[LEN_ID3_STRING], strack[LEN_ID3_STRING];
     mp3dec_map_info_t map_info;
+    AudioInfo audioinfo;
     while (filename) {
         mfile = NULL;
         memset(stitle,  0x0, sizeof(stitle));
@@ -170,6 +171,7 @@ static void* _index_music(void *arg)
         memset(salbum,  0x0, sizeof(salbum));
         memset(syear,   0x0, sizeof(syear));
         memset(strack,  0x0, sizeof(strack));
+        memset(&audioinfo, 0x0, sizeof(AudioInfo));
 
         if (!_extract_filename(filename, plan, &fpath, &fname)) {
             mtc_mt_dbg("extract %s failure", filename);
@@ -183,10 +185,12 @@ static void* _index_music(void *arg)
                                     stitle, sartist, salbum, syear, strack)) {
                     mfile = mos_calloc(1, sizeof(DommeFile));
                     mp3_md5_get_buf(map_info.buffer, map_info.size, mfile->id);
+                    mp3dec_iterate_buf(map_info.buffer, map_info.size, _iterate_info, &audioinfo);
                     mfile->dir = fpath;
                     mfile->name = strdup(fname);
                     mfile->title = strdup(stitle);
                     mfile->sn = atoi(strack);
+                    mfile->length = (uint32_t)audioinfo.samples / audioinfo.hz + 1;
                     mfile->touched = false;
 
                     mtc_mt_noise("%s %s %s %s %s", mfile->id, sartist, stitle, salbum, strack);

@@ -75,7 +75,7 @@ typedef struct {
     bool shuffle;
     bool loopon;
     int remain;
-    uint32_t dragto;
+    float dragto;
 
     MLIST *playlist;            /* 播放列表 */
 
@@ -99,6 +99,58 @@ static char* _action_string(PLAY_ACTION act)
     case ACT_STOP: return "停止播放";
     default: return "瞎搞";
     }
+}
+
+static double _get_normalized_volume(snd_mixer_elem_t *elem)
+{
+    long max, min, value;
+
+    if (snd_mixer_selem_get_playback_dB_range(elem, &min, &max) < 0) {
+        mtc_mt_err("get db range failure");
+        return 0;
+    }
+
+    if (snd_mixer_selem_get_playback_dB(elem, 0, &value) < 0) {
+        mtc_mt_err("get db failure");
+        return 0;
+    }
+
+    //Perceived 'loudness' does not scale linearly with the actual decible level
+    //it scales logarithmically
+    return exp10((value - max) / 6000.0);
+}
+
+static void _set_normalized_volume(snd_mixer_elem_t *elem, float volume)
+{
+    long min, max, value;
+
+    if (volume < 0.017170) volume = 0.017170;
+    else if (volume > 1.0) volume = 1.0;
+
+    mtc_mt_dbg("set value %f", volume);
+
+    if (snd_mixer_selem_get_playback_dB_range(elem, &min, &max)) {
+        mtc_mt_err("get db range failure");
+        return;
+    }
+
+    //Perceived 'loudness' does not scale linearly with the actual decible level
+    //it scales logarithmically
+    value = lrint(6000.0 * log10(volume)) + max;
+
+    snd_mixer_selem_set_playback_dB(elem, 0, value, 0);
+}
+
+static bool _in_playlist(MLIST *playlist, char *id)
+{
+    if (!id || !playlist || mlist_length(playlist) == 0) return false;
+
+    char *track;
+    MLIST_ITERATE(playlist, track) {
+        if (track && !strcmp(track, id)) return true;
+    }
+
+    return false;
 }
 
 uint32_t albumFreeReset(DommeAlbum *disk)
@@ -236,6 +288,8 @@ char* _told_todo(AudioEntry *me)
         }
 
         mtc_mt_warn("no track to play %s %s", me->artist, me->album);
+        free(me->album);
+        free(me->artist);
         me->album = me->artist = NULL;
         return NULL;
     } else if (me->artist) {
@@ -257,6 +311,7 @@ char* _told_todo(AudioEntry *me)
         }
 
         mtc_mt_warn("no track to play %s", me->artist);
+        free(me->artist);
         me->artist = NULL;
         return NULL;
     } else {
@@ -287,8 +342,19 @@ char* _next_todo(AudioEntry *me)
     DommeArtist *artist;
     DommeStore *plan = me->plan;
 
-    if (me->trackid) return me->trackid;
-    else if (me->album && me->artist) {
+    if (me->trackid) {
+        if (me->trackid != me->track->id) {
+            /* 用户切了新歌 */
+            return me->trackid;
+        } else {
+            if (me->loopon) return me->trackid;
+            else {
+                mos_free(me->trackid);
+                return NULL;
+            }
+        }
+    } else if (me->album && me->artist) {
+        mtc_mt_dbg("album's next");
         /* 专辑内下一首 */
         artist = artistFind(plan->artists, me->artist);
         disk = albumFind(artist->albums, me->album);
@@ -333,9 +399,12 @@ char* _next_todo(AudioEntry *me)
 
     album_done:
         mtc_mt_warn("no track to play %s %s", me->artist, me->album);
+        free(me->album);
+        free(me->artist);
         me->album = me->artist = NULL;
         return NULL;
     } else if (me->artist) {
+        mtc_mt_dbg("artist's next");
         /* 艺术家内下一首 */
         artist = artistFind(plan->artists, me->artist);
         if (artist) {
@@ -401,9 +470,11 @@ char* _next_todo(AudioEntry *me)
 
     artist_done:
         mtc_mt_warn("no track to play %s", me->artist);
+        free(me->artist);
         me->artist = NULL;
         return NULL;
     } else {
+        mtc_mt_dbg("library's next");
         /* 媒体库内下一首 */
         if (plan->count_touched >= plan->count_track) {
             if (me->loopon) dommeFreeReset(plan);
@@ -437,24 +508,6 @@ char* _next_todo(AudioEntry *me)
         mtc_mt_warn("no track to play %s", plan->name);
         return NULL;
     }
-}
-
-static int _iterate_info(void *user_data, const uint8_t *frame, int frame_size,
-                         int free_format_bytes, size_t buf_size, uint64_t offset,
-                         mp3dec_frame_info_t *info)
-{
-    if (!frame) return 1;
-
-    AudioInfo *outinfo = (AudioInfo*)user_data;
-
-    outinfo->channels = info->channels;
-    outinfo->layer = info->layer;
-    outinfo->bps = info->bitrate_kbps;
-    outinfo->hz = info->hz;
-    outinfo->samples += hdr_frame_samples(frame);
-    //d->samples += mp3dec_decode_frame(d->mp3d, frame, frame_size, NULL, info);
-
-    return 0;
 }
 
 static int _iterate_callback(void *user_data, const uint8_t *frame, int frame_size,
@@ -524,7 +577,7 @@ static bool _play_raw(AudioEntry *me, char *filename, DommeFile *mfile)
 
     if (me->act != ACT_DRAG && me->act != ACT_RESUME) track->percent = 0;
 
-    mtc_mt_dbg("playing %s %.2f", filename, track->percent);
+    mtc_mt_dbg("playing %s %s %.2f", mfile->id, filename, track->percent);
 
     int ret = mp3dec_open_file(filename, &track->file);
     if (ret != 0) {
@@ -566,6 +619,12 @@ static bool _play_raw(AudioEntry *me, char *filename, DommeFile *mfile)
         mdf_set_value(dnode, "title", mfile->title);
         mdf_set_value(dnode, "artist", mfile->artist->name);
         mdf_set_value(dnode, "album", mfile->disk->title);
+
+        mdf_set_value(dnode, "file_type", "MP3");
+        mdf_set_valuef(dnode, "bps=%dkbps", track->info.bps);
+        mdf_set_valuef(dnode, "rate=%.1fkhz", (float)track->info.hz / 1000);
+        mdf_set_double_value(dnode, "volume", _get_normalized_volume(me->mixer));
+        mdf_set_bool_value(dnode, "shuffle", me->shuffle);
 
         MessagePacket *packet = packetMessageInit(bufsend, LEN_PACKET_NORMAL);
         size_t sendlen = packetResponseFill(packet, SEQ_PLAY_INFO, CMD_PLAY_INFO, true, NULL, dnode);
@@ -660,10 +719,7 @@ static void* _player(void *arg)
             track->id = _told_todo(me);
             if (track->id) {
                 _play(me);
-                mlist_append(me->playlist, strdup(track->id));
             } else mtc_mt_warn("nothing to play");
-
-            if (!me->loopon) me->trackid = NULL;
 
             break;
         case ACT_NEXT:
@@ -671,29 +727,48 @@ static void* _player(void *arg)
             me->act = ACT_NONE;
             break;
         case ACT_PREV:
-            track->id = (char*)mlist_getx(me->playlist, -1);
-            if (track->id) _play(me);
-            else mtc_mt_warn("nothing to play");
+            track->id = (char*)mlist_popx(me->playlist);
+            if (track->id) {
+                _play(me);
+                free(track->id);
+                track->id = NULL;
+            } else {
+                mtc_mt_warn("nothing to play");
+                me->act = ACT_NONE;
+                continue;
+            }
 
             break;
         case ACT_DRAG:
             if (track->id) {
-                track->percent = (float)me->dragto / track->length;
+                track->percent = me->dragto;
                 _play(me);
-            } else mtc_mt_warn("nothing to drag");
+            } else {
+                mtc_mt_warn("nothing to drag");
+                me->act = ACT_NONE;
+                continue;
+            }
 
             break;
         case ACT_PAUSE:
             if (track->id) {
                 me->act = ACT_NONE;
                 continue;
-            } else mtc_mt_warn("nothing to pause");
+            } else {
+                mtc_mt_warn("nothing to pause");
+                me->act = ACT_NONE;
+                continue;
+            }
 
             break;
         case ACT_RESUME:
             if (track->id) {
                 _play(me);
-            } else mtc_mt_warn("nothing to resume");
+            } else {
+                mtc_mt_warn("nothing to resume");
+                me->act = ACT_NONE;
+                continue;
+            }
             break;
         case ACT_STOP:
             track->id = NULL;
@@ -706,9 +781,17 @@ static void* _player(void *arg)
             break;
         }
 
+        if (track->id && !_in_playlist(me->playlist, track->id)) {
+            mtc_mt_dbg("add %s to playlist", track->id);
+            mlist_append(me->playlist, strdup(track->id));
+        }
+
         while (me->act == ACT_NONE && (track->id = _next_todo(me)) != NULL) {
             _play(me);
-            mlist_append(me->playlist, strdup(track->id));
+            if (track->id && !_in_playlist(me->playlist, track->id)) {
+                mtc_mt_dbg("add %s to playlist", track->id);
+                mlist_append(me->playlist, strdup(track->id));
+            }
         }
     }
 
@@ -753,6 +836,7 @@ bool audio_process(BeeEntry *be, QueueEntry *qe)
     AudioTrack *track = me->track;
 
     mtc_mt_dbg("process command %d", qe->command);
+    MDF_TRACE_MT(qe->nodein);
 
     switch (qe->command) {
     case CMD_STORE_SWITCH:
@@ -775,6 +859,12 @@ bool audio_process(BeeEntry *be, QueueEntry *qe)
                 mdf_set_value(qe->nodeout, "title", mfile->title);
                 mdf_set_value(qe->nodeout, "artist", mfile->artist->name);
                 mdf_set_value(qe->nodeout, "album", mfile->disk->title);
+
+                mdf_set_value(qe->nodeout, "file_type", "MP3");
+                mdf_set_valuef(qe->nodeout, "bps=%dkbps", track->info.bps);
+                mdf_set_valuef(qe->nodeout, "rate=%.1fkhz", (float)track->info.hz / 1000);
+                mdf_set_double_value(qe->nodeout, "volume", _get_normalized_volume(me->mixer));
+                mdf_set_bool_value(qe->nodeout, "shuffle", me->shuffle);
             }
         }
 
@@ -783,11 +873,43 @@ bool audio_process(BeeEntry *be, QueueEntry *qe)
         packetCRCFill(packet);
 
         SSEND(qe->client->base.fd, qe->client->bufsend, sendlen);
-        break;
     }
+    break;
+    case CMD_SET_SHUFFLE:
+    {
+        me->shuffle = mdf_get_bool_value(qe->nodein, "shuffle", false);
+    }
+    break;
+    case CMD_SET_VOLUME:
+    {
+        _set_normalized_volume(me->mixer, mdf_get_double_value(qe->nodein, "volume", 0.2));
+    }
+    break;
     case CMD_PLAY:
+    {
+        mos_free(me->trackid);
+        mos_free(me->artist);
+        mos_free(me->album);
+
+        char *id = mdf_get_value(qe->nodein, "id", NULL);
+        char *name = mdf_get_value(qe->nodein, "name", NULL);
+        char *title = mdf_get_value(qe->nodein, "title", NULL);
+
+        if (id) {
+            me->trackid = strdup(id);
+        }
+        if (name) {
+            if (me->artist) free(me->artist);
+            me->artist = strdup(name);
+        }
+        if (title) {
+            if (me->album) free(me->album);
+            me->album = strdup(title);
+        }
+
         me->act = ACT_PLAY;
-        break;
+    }
+    break;
     case CMD_PAUSE:
         me->act = ACT_PAUSE;
         break;
@@ -796,6 +918,13 @@ bool audio_process(BeeEntry *be, QueueEntry *qe)
         break;
     case CMD_NEXT:
         me->act = ACT_NEXT;
+        break;
+    case CMD_PREVIOUS:
+        me->act = ACT_PREV;
+        break;
+    case CMD_DRAGTO:
+        me->dragto = mdf_get_double_value(qe->nodein, "percent", 0.0);
+        me->act = ACT_DRAG;
         break;
     default:
         break;
@@ -847,7 +976,7 @@ BeeEntry* _start_audio()
     me->shuffle = true;
     me->loopon = false;
     me->remain = -1;
-    me->dragto = 0;
+    me->dragto = 0.0;
     mlist_init(&me->playlist, free);
 
     me->track = mos_calloc(1, sizeof(AudioTrack));
