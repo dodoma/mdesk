@@ -719,7 +719,11 @@ static void* _player(void *arg)
             track->id = _told_todo(me);
             if (track->id) {
                 _play(me);
-            } else mtc_mt_warn("nothing to play");
+            } else {
+                mtc_mt_warn("nothing to play");
+                me->act = ACT_NONE;
+                continue;
+            }
 
             break;
         case ACT_NEXT:

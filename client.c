@@ -131,8 +131,8 @@ static bool _parse_recv(NetClientNode *client, uint8_t *recvbuf, size_t recvlen)
         case IDIOT_PING:
             //mtc_mt_dbg("ping received");
             sendlen = packetPONGFill(sendbuf, sizeof(sendbuf));
-            SSEND(client->base.fd, sendbuf, sendlen);
-            //MSG_DUMP_MT("SEND: ", sendbuf, sendlen);
+            //SSEND(client->base.fd, sendbuf, sendlen);
+            send(client->base.fd, sendbuf, sendlen, MSG_NOSIGNAL);
             break;
         case IDIOT_PONG:
             break;

@@ -162,9 +162,11 @@ static bool _info_get_id3v2(const uint8_t *buf, size_t len,
     if (len >= 10 && !memcmp(buf, "ID3", 3) && buf[3] <= 0x04 &&
         !((buf[5] & 15) || (buf[6] & 0x80) || (buf[7] & 0x80) || (buf[8] & 0x80) || (buf[9] & 0x80))) {
 
-        _read_id3v2(buf, len, ID3_TITLE, title, LEN_ID3_STRING);
+        if (_read_id3v2(buf, len, ID3_TITLE, title, LEN_ID3_STRING) == 0) return false;
+
         if (_read_id3v2(buf, len, ID3_ARTIST2, artist, LEN_ID3_STRING) == 0)
-            _read_id3v2(buf, len, ID3_ARTIST, artist, LEN_ID3_STRING);
+            if (_read_id3v2(buf, len, ID3_ARTIST, artist, LEN_ID3_STRING) == 0) return false;
+
         _read_id3v2(buf, len, ID3_ALBUM, album,  LEN_ID3_STRING);
         _read_id3v2(buf, len, ID3_YEAR, year, LEN_ID3_STRING);
         _read_id3v2(buf, len, ID3_TRACK_NUM, track, LEN_ID3_STRING);

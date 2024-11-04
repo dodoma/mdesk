@@ -64,7 +64,7 @@ static struct watcher* _add_watch(DommeStore *plan, char *subdir, int efd, struc
     char fullpath[PATH_MAX] = {0};
     snprintf(fullpath, sizeof(fullpath), "%s%s", plan->basedir, subdir);
 
-    int wd = inotify_add_watch(efd, fullpath, IN_CREATE | IN_DELETE | IN_CLOSE_WRITE);
+    int wd = inotify_add_watch(efd, fullpath, IN_CREATE | IN_DELETE | IN_CLOSE_WRITE | IN_MOVED_TO);
     if (wd == -1) {
         mtc_mt_warn("can't watch %s %s", fullpath, strerror(errno));
         return seed;
@@ -392,7 +392,8 @@ struct watcher* indexerWatch(int efd, struct watcher *seeds, AudioEntry *me)
                         mlist_append(plan->dirs, strdup(pathname));
                     }
 
-                    int wd = inotify_add_watch(efd, fullname, IN_CREATE | IN_DELETE | IN_CLOSE_WRITE);
+                    int wd = inotify_add_watch(efd, fullname,
+                                               IN_CREATE | IN_DELETE | IN_CLOSE_WRITE | IN_MOVED_TO);
                     if (wd == -1) {
                         mtc_mt_warn("can't watch %s %s", fullname, strerror(errno));
                     } else {
@@ -433,59 +434,70 @@ struct watcher* indexerWatch(int efd, struct watcher *seeds, AudioEntry *me)
                 char *fpath, *fname;
                 snprintf(filename, PATH_MAX, "%s%s%s", plan->basedir, arg->path, event->name);
 
-                if (event->mask & IN_CLOSE_WRITE) {
-                    mtc_mt_dbg("%s%s CREATE file %s", plan->basedir, arg->path, event->name);
+                if (event->mask & IN_CLOSE_WRITE || event->mask & IN_MOVED_TO) {
+                    if (event->name[0] == '.' || !strcmp(event->name, "music.db")) continue;
 
-                    if (!strcmp(event->name, "music.db")) continue;
+                    mtc_mt_dbg("%s%s CREATE file %s", plan->basedir, arg->path, event->name);
 
                     char stitle[LEN_ID3_STRING], sartist[LEN_ID3_STRING], salbum[LEN_ID3_STRING];
                     char syear[LEN_ID3_STRING], strack[LEN_ID3_STRING];
+                    mp3dec_map_info_t map_info;
+                    AudioInfo audioinfo;
                     memset(stitle,  0x0, sizeof(stitle));
                     memset(sartist, 0x0, sizeof(sartist));
                     memset(salbum,  0x0, sizeof(salbum));
                     memset(syear,   0x0, sizeof(syear));
                     memset(strack,  0x0, sizeof(strack));
+                    memset(&audioinfo, 0x0, sizeof(AudioInfo));
 
                     if (!_extract_filename(filename, plan, &fpath, &fname)) {
                         mtc_mt_warn("extract %s failure", filename);
                         continue;
                     }
 
-                    if (mp3dec_detect(filename) == 0) {
-                        if (mp3_id3_get(filename, stitle, sartist, salbum, syear, strack)) {
-                            mfile = mos_calloc(1, sizeof(DommeFile));
-                            mp3_md5_get(filename, mfile->id);
-                            mfile->dir = fpath;
-                            mfile->name = strdup(event->name);
-                            mfile->title = strdup(stitle);
-                            mfile->sn = atoi(strack);
-                            mfile->touched = false;
+                    if (mp3dec_open_file(filename, &map_info) == 0) {
+                        if (mp3dec_detect_buf(map_info.buffer, map_info.size) == 0) {
+                            if (mp3_id3_get_buf(map_info.buffer, map_info.size,
+                                                stitle, sartist, salbum, syear, strack)) {
+                                mfile = mos_calloc(1, sizeof(DommeFile));
+                                mp3_md5_get_buf(map_info.buffer, map_info.size, mfile->id);
+                                mp3dec_iterate_buf(map_info.buffer, map_info.size,
+                                                   _iterate_info, &audioinfo);
+                                mfile->dir = fpath;
+                                mfile->name = strdup(event->name);
+                                mfile->title = strdup(stitle);
+                                mfile->sn = atoi(strack);
+                                mfile->length = (uint32_t)audioinfo.samples / audioinfo.hz + 1;
+                                mfile->touched = false;
 
-                            artist = artistFind(plan->artists, sartist);
-                            if (!artist) {
-                                artist = artistCreate(sartist);
-                                mlist_append(plan->artists, artist);
-                            }
-                            disk = albumFind(artist->albums, salbum);
-                            if (!disk) {
-                                disk = albumCreate(salbum);
-                                disk->year = strdup(syear);
-                                mlist_append(artist->albums, disk);
-                                plan->count_album++;
-                            }
+                                artist = artistFind(plan->artists, sartist);
+                                if (!artist) {
+                                    artist = artistCreate(sartist);
+                                    mlist_append(plan->artists, artist);
+                                }
+                                disk = albumFind(artist->albums, salbum);
+                                if (!disk) {
+                                    disk = albumCreate(salbum);
+                                    disk->year = strdup(syear);
+                                    mlist_append(artist->albums, disk);
+                                    plan->count_album++;
+                                }
 
-                            mfile->artist = artist;
-                            mfile->disk = disk;
+                                mfile->artist = artist;
+                                mfile->disk = disk;
 
-                            mlist_append(disk->tracks, mfile);
-                            artist->count_track++;
+                                mlist_append(disk->tracks, mfile);
+                                artist->count_track++;
 
-                            mhash_insert(plan->mfiles, mfile->id, mfile);
-                            plan->count_track++;
+                                mhash_insert(plan->mfiles, mfile->id, mfile);
+                                plan->count_track++;
 
-                            arg->on_dirty = g_ctime;
-                        } else mtc_mt_warn("%s mp3 info get failure", filename);
-                    } else mtc_mt_warn("%s not mp3", filename);
+                                arg->on_dirty = g_ctime;
+                            } else mtc_mt_warn("%s mp3 info get failure", filename);
+                        } else mtc_mt_warn("%s not mp3", filename);
+
+                        mp3dec_close_file(&map_info);
+                    }
                 } else if (event->mask & IN_DELETE) {
                     mtc_mt_dbg("%s%s DELETE file %s", plan->basedir, arg->path, event->name);
 
@@ -623,7 +635,7 @@ void* dommeIndexerStart(void *arg)
                 /* timeout */
                 struct watcher *item = seeds;
                 while (item) {
-                    if (item->on_dirty && g_ctime > item->on_dirty && g_ctime - item->on_dirty > 59) {
+                    if (item->on_dirty && g_ctime > item->on_dirty && g_ctime - item->on_dirty > 29) {
                         dommeStoreDumpFilef(item->plan, "%smusic.db", item->plan->basedir);
 
                         item->on_dirty = 0;
