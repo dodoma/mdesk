@@ -537,6 +537,67 @@ void watcherFree(struct watcher *arg)
     }
 }
 
+/* 给所有的在线用户推送music.db */
+static void _OnStoreChange(AudioEntry *me, DommeStore *plan)
+{
+    if (!me || mlist_length(me->base.users) == 0 || !plan || !plan->basedir) return;
+
+    char *libroot = mdf_get_value(g_config, "libraryRoot", "");
+    int rlen = strlen(libroot), blen = strlen(plan->basedir);
+    if (rlen >= blen) return;
+
+    char *storepath = plan->basedir + rlen;
+
+    struct stat fs;
+    char filename[PATH_MAX] = {0};
+    snprintf(filename, sizeof(filename), "%smusic.db", plan->basedir);
+    if (stat(filename, &fs) != 0) {
+        mtc_mt_warn("stat %s failure %s", filename, strerror(errno));
+        return;
+    }
+
+    FILE *fp = fopen(filename, "rb");
+    if (!fp) {
+        mtc_mt_warn("open %s failure %s", filename, strerror(errno));
+        return;
+    }
+
+    NetClientNode *client;
+    MLIST_ITERATE(me->base.users, client) {
+        if (!client->base.dropped && client->binary) {
+            NetBinaryNode *bnode = client->binary;
+
+            mtc_mt_dbg("push %smusic.db to %d", plan->basedir, bnode->base.fd);
+
+            /*
+             * CMD_SYNC
+             */
+            char nameWithPath[PATH_MAX];
+            snprintf(nameWithPath, sizeof(nameWithPath), "%smusic.db", storepath);
+
+            uint8_t bufsend[LEN_PACKET_NORMAL];
+            MessagePacket *packet = packetMessageInit(bufsend, LEN_PACKET_NORMAL);
+            size_t sendlen = packetBFileFill(packet, nameWithPath, fs.st_size);
+            packetCRCFill(packet);
+
+            SSEND(bnode->base.fd, bufsend, sendlen);
+
+            /*
+             * file contents
+             */
+            fseek(fp, 0, SEEK_SET);
+            uint8_t buf[4096] = {0};
+            size_t len = 0;
+            while ((len = fread(buf, 1, sizeof(buf), fp)) > 0) {
+                SSEND(bnode->base.fd, buf, len);
+            }
+
+        }
+    }
+
+    fclose(fp);
+}
+
 void* dommeIndexerStart(void *arg)
 {
     AudioEntry *me = (AudioEntry*)arg;
@@ -637,6 +698,9 @@ void* dommeIndexerStart(void *arg)
                 while (item) {
                     if (item->on_dirty && g_ctime > item->on_dirty && g_ctime - item->on_dirty > 29) {
                         dommeStoreDumpFilef(item->plan, "%smusic.db", item->plan->basedir);
+
+                        /* 通知所有已连接客户端，更新媒体数据库 */
+                        _OnStoreChange(me, item->plan);
 
                         item->on_dirty = 0;
                     }

@@ -430,6 +430,7 @@ void binaryPush(BeeEntry *be, SYNC_TYPE stype, NetBinaryNode *client)
 
 bool storage_process(BeeEntry *be, QueueEntry *qe)
 {
+    char filename[PATH_MAX] = {0};
     MERR *err;
     StorageEntry *me = (StorageEntry*)be;
 
@@ -459,7 +460,6 @@ bool storage_process(BeeEntry *be, QueueEntry *qe)
             break;
         }
 
-        char filename[PATH_MAX] = {0};
         snprintf(filename, sizeof(filename), "%s%smusic.db", me->libroot, me->storepath);
         char ownsum[33] = {0};
         ssize_t ownsize = mhash_md5_file_s(filename, ownsum);
@@ -497,6 +497,25 @@ bool storage_process(BeeEntry *be, QueueEntry *qe)
         SYNC_TYPE type = mdf_get_int_value(qe->nodein, "type", SYNC_RAWFILE);
 
         _push(me, name, id, artist, album, type, qe->client->binary);
+    }
+    break;
+    case CMD_REMOVE:
+    {
+        char *id = mdf_get_value(qe->nodein, "id", NULL);
+        if (id) {
+            DommeFile *mfile = dommeGetFile(me->plan, id);
+            if (mfile) {
+                snprintf(filename, sizeof(filename), "%s%s%s%s", me->libroot, me->storepath,
+                         mfile->dir, mfile->name);
+                remove(filename);
+
+                /*
+                 * 因为独特(SB)的设计，删除文件时，能及时更新plan，新增时则不能
+                 * 再次强调，CMD_DB_MD5为同步前必传，以更新plan
+                 */
+                mhash_remove(me->plan->mfiles, id);
+            }
+        }
     }
     break;
     default:

@@ -50,6 +50,7 @@ typedef enum {
 typedef enum {
     CMD_DB_MD5 = 0,
     CMD_SYNC_PULL,
+    CMD_REMOVE,                 /*  删除媒体文件 */
 } COMMAND_STORAGE;
 
 typedef enum {
