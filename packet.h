@@ -11,6 +11,7 @@ typedef enum {
     IDIOT_PONG,
     IDIOT_CONNECT,              /* contrl socket 申请 clientid */
     IDIOT_PLAY_STEP,
+    IDIOT_USTICK_MOUNT,
 } IDIOT_INDICATOR;
 
 typedef enum {
@@ -32,6 +33,7 @@ typedef enum {
 
 typedef enum {
     CMD_WIFI_SET = 0,
+    CMD_HOME_INFO,
 } COMMAND_HDARDWAR;
 
 typedef enum {
@@ -59,6 +61,7 @@ typedef enum {
     SEQ_CONNECTION_LOST,
     SEQ_PLAY_INFO,              /* 查询当前播放信息（文件，艺术家等），音源切歌时可主动推送 */
     SEQ_PLAY_STEP,              /* 音源正常播放中 */
+    SEQ_SYNC_REQ = 101,         /* libpocket 请求了热情期待返回的包 */
     SEQ_USER_START = 0x401,
 } SYS_CALLBACK_SEQ;
 

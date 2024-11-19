@@ -85,6 +85,7 @@ typedef struct {
 #include "_mp3.c"
 #include "_audio_init.c"
 #include "_audio_indexer.c"
+#include "_audio_method.c"
 
 static char* _action_string(PLAY_ACTION act)
 {

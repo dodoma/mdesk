@@ -82,4 +82,6 @@ void queueEntryPush(QueueManager *queue, QueueEntry *qe);
 
 void binaryPush(BeeEntry *be, SYNC_TYPE stype, NetBinaryNode *client);
 
+void onUstickMount(char *name);
+
 #endif  /* ___BEE_H__ */

@@ -1,0 +1,10 @@
+[Unit]
+Description=Notify AVM on usb stick mounted
+Requires=media-udisk.mount
+After=media-udisk.mount
+
+[Service]
+ExecStart=/home/pi/mdesk/tools/on_udisk_mount.sh
+
+[Install]
+WantedBy=media-udisk.mount

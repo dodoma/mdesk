@@ -4,6 +4,7 @@
 #include "timer.h"
 
 extern MDF *g_config;
+extern MDF *g_runtime;
 extern TimerEntry *g_timers;
 
 extern time_t g_ctime;
