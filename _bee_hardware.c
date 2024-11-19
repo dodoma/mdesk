@@ -7,6 +7,7 @@ typedef struct {
 
 struct diskinfo {
     uint64_t capacity;
+    uint64_t occupy;
     uint64_t remain;
     float percent;         /* 使用占比 0.64 */
 };
@@ -34,7 +35,7 @@ static char* _size_2_string(uint64_t len)
 
 static struct diskinfo _get_disk_space(const char *path)
 {
-    struct diskinfo fsinfo = {.capacity = 0, .remain = 0, .percent = 0.0};
+    struct diskinfo fsinfo = {.capacity = 0, .occupy = 0, .percent = 0.0};
 
     if (!path) return fsinfo;
 
@@ -46,11 +47,45 @@ static struct diskinfo _get_disk_space(const char *path)
 
     fsinfo.capacity = (uint64_t)st.f_blocks * st.f_frsize;
     fsinfo.remain = (uint64_t)st.f_bavail * st.f_frsize;
-    if (fsinfo.capacity != 0)
-        fsinfo.percent = (double)(fsinfo.capacity - fsinfo.remain) / fsinfo.capacity;
-    //fsinfo.percent = roundf(fsinfo.percent * 100) / 100;
+    fsinfo.occupy = fsinfo.capacity > fsinfo.remain ? fsinfo.capacity - fsinfo.remain : 0;
+    if (fsinfo.capacity != 0) {
+        fsinfo.percent = (double)(fsinfo.occupy) / fsinfo.capacity;
+        //fsinfo.percent = roundf(fsinfo.percent * 100) / 100;
+    }
 
     return fsinfo;
+}
+
+static uint64_t _disk_useage(const char *path)
+{
+    char filename[PATH_MAX];
+
+    if (!path) return 0;
+
+    DIR *dir = opendir(path);
+    if (!dir) return 0;
+
+    uint64_t filesize = 0;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
+
+        struct stat info;
+        snprintf(filename, sizeof(filename), "%s%s", path, entry->d_name);
+        if (stat(filename, &info) == -1) {
+            mtc_mt_warn("stat %s failure %s", filename, strerror(errno));
+            continue;
+        }
+
+        if (S_ISDIR(info.st_mode)) {
+            snprintf(filename, sizeof(filename), "%s%s/", path, entry->d_name);
+            filesize += _disk_useage(filename);
+        } else if (S_ISREG(info.st_mode)) filesize += info.st_size;
+    }
+
+    closedir(dir);
+
+    return filesize;
 }
 
 static bool _dir_is_empty(const char *path)
@@ -141,6 +176,28 @@ static void _usb_stick_free(struct ustick *stick)
     }
 }
 
+static char* _interface_ipv4(char *iface)
+{
+    static char ip[INET_ADDRSTRLEN];
+    struct ifreq ifr;
+
+    if (!iface) return "";
+
+    memset(ip, 0x0, INET_ADDRSTRLEN);
+
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+
+    strncpy(ifr.ifr_name, iface, IFNAMSIZ-1);
+    ifr.ifr_addr.sa_family = AF_INET;
+
+    ioctl(fd, SIOCGIFADDR, &ifr);
+    close(fd);
+
+    inet_ntop(AF_INET, (void*)&((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr, ip, INET_ADDRSTRLEN);
+
+    return ip;
+}
+
 bool hdw_process(BeeEntry *be, QueueEntry *qe)
 {
     //HardwareEntry *me = (HardwareEntry*)be;
@@ -166,12 +223,14 @@ bool hdw_process(BeeEntry *be, QueueEntry *qe)
         mdf_set_value(qe->nodeout, "deviceID", g_cpuid);
         mdf_set_value(qe->nodeout, "deviceName", mdf_get_value(g_runtime, "deviceName", ""));
         mdf_set_bool_value(qe->nodeout, "autoPlay", mdf_get_bool_value(g_runtime, "autoPlay", false));
-        mdf_set_value(qe->nodeout, "shareLocation", "//TODO");
+        mdf_set_value(qe->nodeout, "shareLocation", _interface_ipv4("wlan0"));
 
         mdf_set_value(qe->nodeout, "capacity", _size_2_string(fsinfo.capacity));
         mdf_set_value(qe->nodeout, "remain", _size_2_string(fsinfo.remain));
+        mdf_set_value(qe->nodeout, "useage", _size_2_string(fsinfo.occupy));
         mdf_set_double_value(qe->nodeout, "percent", fsinfo.percent);
 
+        /* usbStick */
         struct ustick *stick = _usb_stick_get("/media");
         struct ustick *tnode = stick;
 
@@ -183,8 +242,26 @@ bool hdw_process(BeeEntry *be, QueueEntry *qe)
             tnode = tnode->next;
         }
         mdf_object_2_array(snode, NULL);
+        if (mdf_child_count(snode, NULL) == 0) mdf_set_bool_value(qe->nodeout, "usbON", false);
+        else mdf_set_bool_value(qe->nodeout, "usbON", true);
 
         _usb_stick_free(stick);
+
+        /* libraries */
+        snode = mdf_get_or_create_node(qe->nodeout, "libraries");
+        MLIST *plans = mediaPlans();
+        DommeStore *plan;
+        MLIST_ITERATE(plans, plan) {
+            uint64_t filesize = _disk_useage(plan->basedir);
+
+            MDF *cnode = mdf_insert_node(snode, NULL, -1);
+            mdf_set_value(cnode, "name", plan->name);
+            mdf_set_int_value(cnode, "countTrack", plan->count_track);
+            mdf_set_value(cnode, "space", _size_2_string(filesize));
+            if (plan->moren) mdf_set_bool_value(cnode, "dft", true);
+            else mdf_set_bool_value(cnode, "dft", false);
+        }
+        mdf_object_2_array(snode, NULL);
 
         MessagePacket *packet = packetMessageInit(qe->client->bufsend, LEN_PACKET_NORMAL);
         size_t sendlen = packetResponseFill(packet, qe->seqnum, qe->command, true, NULL, qe->nodeout);

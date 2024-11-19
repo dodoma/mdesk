@@ -84,4 +84,7 @@ void binaryPush(BeeEntry *be, SYNC_TYPE stype, NetBinaryNode *client);
 
 void onUstickMount(char *name);
 
+/* 注意，请严格控制，对返回结果只读不写 */
+MLIST* mediaPlans();
+
 #endif  /* ___BEE_H__ */

@@ -40,7 +40,7 @@ typedef struct {
 
 typedef struct {
     char *name;
-    char *basedir;
+    char *basedir;              /* libroot + config.json中的path + [/] */
     bool moren;                 /* 默认媒体库 */
 
     MLIST *dirs;

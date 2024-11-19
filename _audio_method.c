@@ -14,3 +14,16 @@ void onUstickMount(char *name)
         if (!client->base.dropped) SSEND(client->base.fd, bufsend, LEN_IDIOT);
     }
 }
+
+MLIST* mediaPlans()
+{
+    BeeEntry *be = beeFind(FRAME_AUDIO);
+    if (!be) {
+        mtc_mt_warn("can't find audio backend");
+        return NULL;
+    }
+
+    AudioEntry *me = (AudioEntry*)be;
+
+    return me->plans;
+}
