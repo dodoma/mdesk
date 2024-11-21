@@ -3,15 +3,6 @@ struct indexer_arg {
     MLIST *files;
 };
 
-struct watcher {
-    int wd;
-    time_t on_dirty;
-    DommeStore *plan;
-    char *path;
-
-    struct watcher *next;
-};
-
 static int _scan_directory(const struct dirent *ent)
 {
     if ((ent->d_name[0] == '.' && ent->d_name[1] == 0) ||
@@ -663,21 +654,21 @@ void* dommeIndexerStart(void *arg)
     /* me->plans 已是最新的索引文件，并都已吐出至music.db，poll 和 ionotify 监控目录变化 */
     mtc_mt_dbg("plans DONE. monitor file system...");
 
-    int efd = inotify_init1(IN_NONBLOCK);
-    if (efd == -1) {
+    me->efd = inotify_init1(IN_NONBLOCK);
+    if (me->efd == -1) {
         mtc_mt_err("inotify init failure %s", strerror(errno));
         return NULL;
     }
 
-    struct watcher *seeds = NULL;
+    me->seeds = NULL;
 
     MLIST_ITERATE(me->plans, plan) {
-        seeds = _add_watch(plan, "", efd, seeds);
+        me->seeds = _add_watch(plan, "", me->efd, me->seeds);
     }
 
-    if (seeds) {
+    if (me->seeds) {
         struct pollfd fds[1];
-        fds[0].fd = efd;
+        fds[0].fd = me->efd;
         fds[0].events = POLLIN;
         int nfd = 1;
 
@@ -690,11 +681,11 @@ void* dommeIndexerStart(void *arg)
 
             if (poll_num > 0) {
                 if (fds[0].revents & POLLIN) {
-                    seeds = indexerWatch(efd, seeds, me);
+                    me->seeds = indexerWatch(me->efd, me->seeds, me);
                 }
             } else if (poll_num == 0) {
                 /* timeout */
-                struct watcher *item = seeds;
+                struct watcher *item = me->seeds;
                 while (item) {
                     if (item->on_dirty && g_ctime > item->on_dirty && g_ctime - item->on_dirty > 29) {
                         dommeStoreDumpFilef(item->plan, "%smusic.db", item->plan->basedir);
@@ -711,7 +702,7 @@ void* dommeIndexerStart(void *arg)
         }
     } else mtc_mt_err("no directory need to watch");
 
-    watcherFree(seeds);
+    watcherFree(me->seeds);
 
     return MERR_OK;
 }

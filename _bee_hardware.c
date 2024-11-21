@@ -200,19 +200,22 @@ static char* _interface_ipv4(char *iface)
 
 bool hdw_process(BeeEntry *be, QueueEntry *qe)
 {
+    char filename[PATH_MAX];
     //HardwareEntry *me = (HardwareEntry*)be;
+    MessagePacket *packet = NULL;
+    size_t sendlen = 0;
+    MERR *err;
 
     mtc_mt_dbg("process command %d", qe->command);
+
+    memset(filename, 0x0, PATH_MAX);
 
     switch (qe->command) {
     case CMD_WIFI_SET:
         mtc_mt_dbg("set wifi ... %s", mdf_get_value(qe->nodein, "name", "unknownName"));
         /* TODO business logic */
-        MessagePacket *packet = packetMessageInit(qe->client->bufsend, LEN_PACKET_NORMAL);
-        size_t sendlen = packetACKFill(packet, qe->seqnum, qe->command, true, NULL);
-        packetCRCFill(packet);
-
-        SSEND(qe->client->base.fd, qe->client->bufsend, sendlen);
+        packet = packetMessageInit(qe->client->bufsend, LEN_PACKET_NORMAL);
+        sendlen = packetACKFill(packet, qe->seqnum, qe->command, true, NULL);
 
         break;
     case CMD_HOME_INFO:
@@ -249,7 +252,7 @@ bool hdw_process(BeeEntry *be, QueueEntry *qe)
 
         /* libraries */
         snode = mdf_get_or_create_node(qe->nodeout, "libraries");
-        MLIST *plans = mediaPlans();
+        MLIST *plans = mediaStoreList();
         DommeStore *plan;
         MLIST_ITERATE(plans, plan) {
             uint64_t filesize = _disk_useage(plan->basedir);
@@ -263,15 +266,128 @@ bool hdw_process(BeeEntry *be, QueueEntry *qe)
         }
         mdf_object_2_array(snode, NULL);
 
-        MessagePacket *packet = packetMessageInit(qe->client->bufsend, LEN_PACKET_NORMAL);
-        size_t sendlen = packetResponseFill(packet, qe->seqnum, qe->command, true, NULL, qe->nodeout);
-        packetCRCFill(packet);
+        packet = packetMessageInit(qe->client->bufsend, LEN_PACKET_NORMAL);
+        sendlen = packetResponseFill(packet, qe->seqnum, qe->command, true, NULL, qe->nodeout);
+    }
+    break;
+    case CMD_STORE_CREATE:
+    {
+        /*
+         * 创建媒体库需要：
+         * 1. 创建媒体库磁盘目录
+         * 2. 修改 libraryRoot/config.json 写入媒体库信息
+         * 3. 生成 samba 配置文件，并重启 samba
+         * 4. 通知 bee_audio 管理该媒体库
+         */
+        packet = packetMessageInit(qe->client->bufsend, LEN_PACKET_NORMAL);
 
-        SSEND(qe->client->base.fd, qe->client->bufsend, sendlen);
+        char *storename = mdf_get_value(qe->nodein, "name", NULL);
+        if (!storename) {
+            sendlen = packetACKFill(packet, qe->seqnum, qe->command, false, "缺少name参数");
+            break;
+        }
+
+        char *libroot = mdf_get_value(g_config, "libraryRoot", NULL);
+        if (!libroot) {
+            sendlen = packetACKFill(packet, qe->seqnum, qe->command, false, "配置文件损坏");
+            break;
+        }
+
+        if (storeExist(storename)) {
+            sendlen = packetACKFill(packet, qe->seqnum, qe->command, false, "媒体库已存在");
+            break;
+        }
+
+        /* 创建媒体库目录 */
+        struct timeval tv;
+        gettimeofday(&tv, NULL);
+        char storepath[20] = {0}; /* 2024-11-20 11:05:12 */
+        struct tm *tm = localtime(&tv.tv_sec);
+        strftime(storepath, 20, "%Y-%m-%d %H:%M:%S", tm);
+        storepath[24] = 0;
+
+        snprintf(filename, sizeof(filename), "%s%s", libroot, storepath);
+        if (!mos_mkdir(filename, 0755)) {
+            mtc_mt_warn("mkdir %s failure %s", filename, strerror(errno));
+            sendlen = packetACKFill(packet, qe->seqnum, qe->command, false, "创建目录失败");
+            break;
+        }
+
+        /* 修改媒体库配置文件 */
+        snprintf(filename, sizeof(filename), "%sconfig.json", libroot);
+
+        MDF *libconfig;
+        mdf_init(&libconfig);
+        err = mdf_json_import_file(libconfig, filename);
+        if (err != MERR_OK) {
+            TRACE_NOK_MT(err);
+            sendlen = packetACKFill(packet, qe->seqnum, qe->command, false, "读取库文件失败");
+
+            mdf_destroy(&libconfig);
+            break;
+        }
+
+        MDF *snode = mdf_insert_node(libconfig, NULL, -1);
+        mdf_set_value(snode, "name", storename);
+        mdf_set_valuef(snode, "path=%s/", storepath);
+
+        err = mdf_json_export_file(libconfig, filename);
+        if (err != MERR_OK) {
+            TRACE_NOK_MT(err);
+            sendlen = packetACKFill(packet, qe->seqnum, qe->command, false, "写入库文件失败");
+
+            mdf_destroy(&libconfig);
+            break;
+        }
+
+        /* 重启samba服务 */
+        MCS *tpl;
+        snprintf(filename, sizeof(filename), "%stemplate/smb.conf", g_location);
+        err = mcs_parse_file(filename, NULL, NULL, &tpl);
+        if (err != MERR_OK) {
+            TRACE_NOK_MT(err);
+            sendlen = packetACKFill(packet, qe->seqnum, qe->command, false, "读取模板文件失败");
+            mdf_destroy(&libconfig);
+            break;
+        }
+
+        MDF *datanode;
+        mdf_init(&datanode);
+        mdf_set_value(datanode, "libroot", libroot);
+        mdf_copy(datanode, "stores", libconfig, true);
+
+        //err = mcs_rend(tpl, datanode, "/tmp/smb.conf");
+        err = mcs_rend(tpl, datanode, "/etc/samba/smb.conf");
+        if (err != MERR_OK) {
+            TRACE_NOK_MT(err);
+            sendlen = packetACKFill(packet, qe->seqnum, qe->command, false, "写入模板文件失败");
+            mdf_destroy(&libconfig);
+            mdf_destroy(&datanode);
+            break;
+        }
+
+        mdf_destroy(&datanode);
+        mdf_destroy(&libconfig);
+
+        if (system("systemctl reload smbd") != 0) {
+            mtc_mt_warn("restart smbd failure");
+            sendlen = packetACKFill(packet, qe->seqnum, qe->command, false, "重启服务失败");
+            break;
+        }
+
+        /* 通知 audio */
+        storeCreated(storename);
+
+        sendlen = packetACKFill(packet, qe->seqnum, qe->command, true, NULL);
     }
     break;
     default:
         break;
+    }
+
+    if (packet && sendlen > 0) {
+        packetCRCFill(packet);
+        SSEND(qe->client->base.fd, qe->client->bufsend, sendlen);
     }
 
     return true;

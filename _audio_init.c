@@ -448,9 +448,10 @@ bool dommeStoreReplace(AudioEntry *me, DommeStore *plan)
 
     mtc_mt_dbg("replace store %s", plan->name);
 
-    me->act = ACT_STOP;
-
-    if (plan->moren) me->plan = plan;
+    if (plan->moren) {
+        me->act = ACT_STOP;
+        me->plan = plan;
+    }
 
     DommeStore sample = {.name = plan->name}, *key = &sample;
     int index = mlist_index(me->plans, &key, _plan_compare);

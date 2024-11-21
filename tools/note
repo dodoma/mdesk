@@ -1,0 +1,12 @@
+限定规则仅适用于smbd.service
+
+if (action.lookup("unit") == "smbd.service") {
+    return polkit.Result.YES;
+}
+
+
+组合条件允许多个服务
+
+if (["smbd.service", "nmbd.service"].includes(action.lookup("unit"))) {
+    return polkit.Result.YES;
+}

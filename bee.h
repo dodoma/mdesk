@@ -82,9 +82,15 @@ void queueEntryPush(QueueManager *queue, QueueEntry *qe);
 
 void binaryPush(BeeEntry *be, SYNC_TYPE stype, NetBinaryNode *client);
 
+
 void onUstickMount(char *name);
 
 /* 注意，请严格控制，对返回结果只读不写 */
-MLIST* mediaPlans();
+MLIST* mediaStoreList();
+
+bool storeExist(char *storename);
+MERR* storeCreated(char *storename);
+bool storeDelete(char *storename, bool force);
+bool storeMerge(char *src, char *dest);
 
 #endif  /* ___BEE_H__ */

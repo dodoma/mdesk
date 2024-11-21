@@ -42,6 +42,15 @@ typedef struct {
     uint32_t length;            /* track length in seconds */
 } AudioTrack;
 
+struct watcher {
+    int wd;
+    time_t on_dirty;
+    DommeStore *plan;
+    char *path;
+
+    struct watcher *next;
+};
+
 /*
  * 总的来说，用户动作有
  * 1. 设置播放范围
@@ -52,12 +61,14 @@ typedef struct {
 typedef struct {
     BeeEntry base;
 
-    pthread_t worker;
+    pthread_t worker;           /* player */
     pthread_mutex_t lock;
     pthread_cond_t cond;
     bool running;
 
-    pthread_t indexer;
+    pthread_t indexer;          /* indexer */
+    struct watcher *seeds;      /* 多线程间对seed无释放操作，暂不加锁 */
+    int efd;
 
     snd_pcm_t *pcm;
     snd_mixer_elem_t *mixer;

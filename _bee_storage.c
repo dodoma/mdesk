@@ -8,8 +8,6 @@ typedef struct {
 
     char *libroot;
 
-    MDF *storeconfig;
-
     DommeStore *plan;
     char *storename;
     char *storepath;
@@ -40,20 +38,35 @@ static void _client_destroy(void *p)
     mos_free(client);
 }
 
-MDF* _store_node(StorageEntry *me, char *name)
+/* 为避免同步通知，每次从磁盘上读取媒体库配置 */
+bool _store_node(StorageEntry *me, char *name, char **storename, char **storepath)
 {
-    if (!me->storeconfig || !name) return NULL;
+    if (!me || !me->libroot || !name || !storename || !storepath) return false;
 
-    MDF *cnode = mdf_node_child(me->storeconfig);
+    MDF *storeconfig;
+    mdf_init(&storeconfig);
+
+    MERR *err = mdf_json_import_filef(storeconfig, "%sconfig.json", me->libroot);
+    RETURN_V_NOK(err, false);
+
+    MDF *cnode = mdf_node_child(storeconfig);
     while (cnode) {
         char *lname = mdf_get_value(cnode, "name", NULL);
+        char *path = mdf_get_value(cnode, "path", NULL);
 
-        if (lname && !strcmp(lname, name)) return cnode;
+        if (lname && !strcmp(lname, name) && path) {
+            *storename = strdup(name);
+            *storepath = strdup(path);
+
+            mdf_destroy(&storeconfig);
+            return true;
+        }
 
         cnode = mdf_node_next(cnode);
     }
 
-    return NULL;
+    mdf_destroy(&storeconfig);
+    return false;
 }
 
 void reqitem_free(void *arg)
@@ -442,10 +455,9 @@ bool storage_process(BeeEntry *be, QueueEntry *qe)
     case CMD_DB_MD5:
     {
         char *name = mdf_get_value(qe->nodein, "name", NULL);
-        MDF *snode = _store_node(me, name);
-        me->storename = mdf_get_value(snode, "name", NULL);
-        me->storepath = mdf_get_value(snode, "path", NULL);
-        if (!me->storename || !me->storepath) {
+        mos_free(me->storename);
+        mos_free(me->storepath);
+        if (!_store_node(me, name, &me->storename, &me->storepath)) {
             mtc_mt_warn("can't find library %s", name);
             break;
         }
@@ -538,14 +550,12 @@ void storage_stop(BeeEntry *be)
     pthread_mutex_destroy(&me->lock);
 
     if (me->plan) dommeStoreFree(me->plan);
-    mdf_destroy(&me->storeconfig);
     mlist_destroy(&me->synclist);
     mlist_destroy(&me->clients);
 }
 
 BeeEntry* _start_storage()
 {
-    MERR *err;
     StorageEntry *me = mos_calloc(1, sizeof(StorageEntry));
 
     me->base.process = storage_process;
@@ -556,10 +566,6 @@ BeeEntry* _start_storage()
         mtc_mt_err("library root path not found");
         return NULL;
     }
-    mdf_init(&me->storeconfig);
-
-    err = mdf_json_import_filef(me->storeconfig, "%sconfig.json", me->libroot);
-    RETURN_V_NOK(err, NULL);
 
     me->plan = NULL;
     me->storename = NULL;
