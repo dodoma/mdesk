@@ -116,6 +116,7 @@ static int _new_connection(int efd, int sfd)
     mlist_init(&nitem->channels, NULL);
     nitem->buf = NULL;
     nitem->recvlen = 0;
+    pthread_mutex_init(&nitem->lock, NULL);
     nitem->base.dropped = false;
 
     struct epoll_event ev = {.data.ptr = nitem, .events = EPOLLIN | EPOLLET};

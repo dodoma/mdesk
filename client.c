@@ -309,6 +309,7 @@ void clientDrop(NetClientNode *client)
     }
 
     if (mlist_length(client->bees) == 0) {
+        mtc_mt_dbg("free user %p", client);
         mlist_destroy(&client->channels);
         mlist_destroy(&client->bees);
         mos_free(client->buf);

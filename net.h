@@ -35,6 +35,7 @@ typedef struct {
     ssize_t recvlen;
     uint8_t bufsend[LEN_PACKET_NORMAL];
 
+    pthread_mutex_t lock;       /* used in destroy user */
     MLIST *bees;                /* list of BeeEntry* */
     MLIST *channels;            /* list of Channel* */
 } NetClientNode;

@@ -108,9 +108,14 @@ static void _user_destroy(void *p)
 {
     if (!p) return;
 
+    /*
+     * 此处仅处理 NetClientNode, 所有client类型节点都用此种方式(包括连上 bee_storage 的client node)
+     * 连上 storage 的 NetBinaryNode 会以额外的方式处理（参考 _bee_storage.c in_bussiness）
+     * 否则 binary node 会在 binaryDrop 中释放
+     */
     NetClientNode *client = (NetClientNode*)p;
 
-    mtc_mt_dbg("user %p left", client);
+    mtc_mt_dbg("user %p left %d", client, mlist_length(client->bees));
 
     Channel *slot;
     MLIST_ITERATE(client->channels, slot) {
@@ -177,9 +182,11 @@ static void* _worker(void *arg)
                 NetClientNode *client;
                 MLIST_ITERATE(be->users, client) {
                     if (client->base.dropped) {
+                        pthread_mutex_lock(&client->lock);
                         mlist_delete_item(client->bees, be, _bee_compare);
-
                         mlist_delete(be->users, _moon_i);
+                        pthread_mutex_unlock(&client->lock);
+
                         _moon_i--;
                     }
                 }
