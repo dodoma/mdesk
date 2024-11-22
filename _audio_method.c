@@ -108,6 +108,30 @@ MERR* storeCreated(char *storename)
     return MERR_OK;
 }
 
+bool storeRename(char *namesrc, char *namedst)
+{
+    if (!namesrc || !namedst) return false;
+
+    BeeEntry *be = beeFind(FRAME_AUDIO);
+    if (!be) {
+        mtc_mt_warn("can't find audio backend");
+        return false;
+    }
+
+    AudioEntry *me = (AudioEntry*)be;
+
+    DommeStore *plan;
+    MLIST_ITERATE(me->plans, plan) {
+        if (!strcmp(plan->name, namesrc)) {
+            free(plan->name);
+            plan->name = strdup(namedst);
+            return true;
+        }
+    }
+
+    return false;
+}
+
 /*
  * 删除媒体库，force 为 true 时删除非空媒体库
  */

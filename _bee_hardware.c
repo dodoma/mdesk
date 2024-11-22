@@ -361,15 +361,17 @@ bool hdw_process(BeeEntry *be, QueueEntry *qe)
         if (err != MERR_OK) {
             TRACE_NOK_MT(err);
             sendlen = packetACKFill(packet, qe->seqnum, qe->command, false, "写入模板文件失败");
+            mcs_destroy(&tpl);
             mdf_destroy(&libconfig);
             mdf_destroy(&datanode);
             break;
         }
 
+        mcs_destroy(&tpl);
         mdf_destroy(&datanode);
         mdf_destroy(&libconfig);
 
-        if (system("systemctl reload smbd") != 0) {
+        if (system("systemctl restart smbd") != 0) {
             mtc_mt_warn("restart smbd failure");
             sendlen = packetACKFill(packet, qe->seqnum, qe->command, false, "重启服务失败");
             break;
@@ -377,6 +379,105 @@ bool hdw_process(BeeEntry *be, QueueEntry *qe)
 
         /* 通知 audio */
         storeCreated(storename);
+
+        sendlen = packetACKFill(packet, qe->seqnum, qe->command, true, NULL);
+    }
+    break;
+    case CMD_STORE_RENAME:
+    {
+        packet = packetMessageInit(qe->client->bufsend, LEN_PACKET_NORMAL);
+
+        char *storea = mdf_get_value(qe->nodein, "from", NULL);
+        char *storeb = mdf_get_value(qe->nodein, "to", NULL);
+        if (!storea || !storeb) {
+            sendlen = packetACKFill(packet, qe->seqnum, qe->command, false, "参数有误");
+            break;
+        }
+
+        if (!storeExist(storea)) {
+            sendlen = packetACKFill(packet, qe->seqnum, qe->command, false, "媒体库不存在");
+            break;
+        }
+
+        if (storeExist(storeb)) {
+            sendlen = packetACKFill(packet, qe->seqnum, qe->command, false, "媒体库已存在");
+            break;
+        }
+
+        /* 修改媒体库配置文件 */
+        char *libroot = mdf_get_value(g_config, "libraryRoot", "");
+        snprintf(filename, sizeof(filename), "%sconfig.json", libroot);
+        MDF *libconfig;
+        mdf_init(&libconfig);
+        err = mdf_json_import_file(libconfig, filename);
+        if (err != MERR_OK) {
+            TRACE_NOK_MT(err);
+            sendlen = packetACKFill(packet, qe->seqnum, qe->command, false, "读取库文件失败");
+
+            mdf_destroy(&libconfig);
+            break;
+        }
+
+        MDF *cnode = mdf_node_child(libconfig);
+        while (cnode) {
+            char *name = mdf_get_value(cnode, "name", NULL);
+            char *path = mdf_get_value(cnode, "path", NULL);
+
+            if (name && path && !strcmp(name, storea)) {
+                mdf_set_value(cnode, "name", storeb);
+                break;
+            }
+
+            cnode = mdf_node_next(cnode);
+        }
+
+        err = mdf_json_export_file(libconfig, filename);
+        if (err != MERR_OK) {
+            TRACE_NOK_MT(err);
+            sendlen = packetACKFill(packet, qe->seqnum, qe->command, false, "写入库文件失败");
+
+            mdf_destroy(&libconfig);
+            break;
+        }
+
+        /* 重启samba服务 */
+        MCS *tpl;
+        snprintf(filename, sizeof(filename), "%stemplate/smb.conf", g_location);
+        err = mcs_parse_file(filename, NULL, NULL, &tpl);
+        if (err != MERR_OK) {
+            TRACE_NOK_MT(err);
+            sendlen = packetACKFill(packet, qe->seqnum, qe->command, false, "读取模板文件失败");
+            mdf_destroy(&libconfig);
+            break;
+        }
+
+        MDF *datanode;
+        mdf_init(&datanode);
+        mdf_set_value(datanode, "libroot", libroot);
+        mdf_copy(datanode, "stores", libconfig, true);
+
+        err = mcs_rend(tpl, datanode, "/etc/samba/smb.conf");
+        if (err != MERR_OK) {
+            TRACE_NOK_MT(err);
+            sendlen = packetACKFill(packet, qe->seqnum, qe->command, false, "写入模板文件失败");
+            mcs_destroy(&tpl);
+            mdf_destroy(&libconfig);
+            mdf_destroy(&datanode);
+            break;
+        }
+
+        mcs_destroy(&tpl);
+        mdf_destroy(&datanode);
+        mdf_destroy(&libconfig);
+
+        if (system("systemctl restart smbd") != 0) {
+            mtc_mt_warn("restart smbd failure");
+            sendlen = packetACKFill(packet, qe->seqnum, qe->command, false, "重启服务失败");
+            break;
+        }
+
+        /* 通知 audio */
+        storeRename(storea, storeb);
 
         sendlen = packetACKFill(packet, qe->seqnum, qe->command, true, NULL);
     }

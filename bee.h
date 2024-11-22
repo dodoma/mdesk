@@ -90,6 +90,7 @@ MLIST* mediaStoreList();
 
 bool storeExist(char *storename);
 MERR* storeCreated(char *storename);
+bool storeRename(char *namesrc, char *namedst);
 bool storeDelete(char *storename, bool force);
 bool storeMerge(char *src, char *dest);
 

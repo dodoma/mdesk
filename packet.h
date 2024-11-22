@@ -35,6 +35,7 @@ typedef enum {
     CMD_WIFI_SET = 0,
     CMD_HOME_INFO,
     CMD_STORE_CREATE,           /* 创建媒体库 */
+    CMD_STORE_RENAME,
 } COMMAND_HDARDWAR;
 
 typedef enum {
