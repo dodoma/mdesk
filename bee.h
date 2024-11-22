@@ -8,7 +8,8 @@
  */
 
 typedef enum {
-    SYNC_RAWFILE = 0,
+    SYNC_RAWFILE = 0,           /* libroot 下的文件 */
+    SYNC_STORE_FILE,            /* 某个 library 下的文件 */
     SYNC_TRACK_COVER,
     SYNC_ARTIST_COVER,
     SYNC_ALBUM_COVER,

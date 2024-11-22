@@ -81,6 +81,49 @@ void reqitem_free(void *arg)
     mos_free(item);
 }
 
+bool _push_raw(StorageEntry *me, struct reqitem *item)
+{
+    NetBinaryNode *client = item->client;
+    if (client->base.fd <= 0 || !item->name) return false;
+
+    mtc_mt_dbg("push %s to %d", item->name, item->client->base.fd);
+
+    char filename[PATH_MAX] = {0};
+    snprintf(filename, sizeof(filename), "%s%s", me->libroot, item->name);
+
+    /*
+     * CMD_SYNC
+     */
+    struct stat fs;
+    if (stat(filename, &fs) == 0) {
+        uint8_t bufsend[LEN_PACKET_NORMAL];
+        MessagePacket *packet = packetMessageInit(bufsend, LEN_PACKET_NORMAL);
+        size_t sendlen = packetBFileFill(packet, item->name, fs.st_size);
+        packetCRCFill(packet);
+
+        SSEND(client->base.fd, bufsend, sendlen);
+    }
+
+    /*
+     * file contents
+     */
+    FILE *fp = fopen(filename, "rb");
+    if (!fp) {
+        mtc_mt_warn("open %s failure %s", filename, strerror(errno));
+        return false;
+    }
+
+    uint8_t buf[4096] = {0};
+    size_t len = 0;
+    while ((len = fread(buf, 1, sizeof(buf), fp)) > 0) {
+        SSEND(client->base.fd, buf, len);
+    }
+
+    fclose(fp);
+
+    return true;
+}
+
 bool _push_puppet(NetBinaryNode *client, const char *filename, const char *pupname)
 {
     if (client->base.fd <= 0 || !filename || !pupname) return false;
@@ -120,7 +163,7 @@ bool _push_puppet(NetBinaryNode *client, const char *filename, const char *pupna
     return true;
 }
 
-bool _push_raw(StorageEntry *me, struct reqitem *item)
+bool _push_store_file(StorageEntry *me, struct reqitem *item)
 {
     NetBinaryNode *client = item->client;
     if (client->base.fd <= 0 || !item->name || !me->storepath) return false;
@@ -382,6 +425,9 @@ void* _pusher(void *arg)
         case SYNC_RAWFILE:
             _push_raw(me, item);
             break;
+        case SYNC_STORE_FILE:
+            _push_store_file(me, item);
+            break;
         case SYNC_TRACK_COVER:
             _push_track_cover(me, item);
             break;
@@ -468,6 +514,7 @@ bool storage_process(BeeEntry *be, QueueEntry *qe)
         me->plan->basedir = strdup(me->storepath);
         err = dommeLoadFromFilef(me->plan, "%s%smusic.db", me->libroot, me->storepath);
         if (err) {
+            dommeStoreFree(me->plan);
             TRACE_NOK_MT(err);
             break;
         }
@@ -487,7 +534,7 @@ bool storage_process(BeeEntry *be, QueueEntry *qe)
 
                 SSEND(qe->client->base.fd, qe->client->bufsend, sendlen);
 
-                _push(me, "music.db", NULL, NULL, NULL, SYNC_RAWFILE, qe->client->binary);
+                _push(me, "music.db", NULL, NULL, NULL, SYNC_STORE_FILE, qe->client->binary);
             } else {
                 /* 文件没更新 */
                 MessagePacket *packet = packetMessageInit(qe->client->bufsend, LEN_PACKET_NORMAL);
@@ -527,6 +574,36 @@ bool storage_process(BeeEntry *be, QueueEntry *qe)
                  */
                 mhash_remove(me->plan->mfiles, id);
             }
+        }
+    }
+    break;
+    case CMD_SYNC_STORE:
+    {
+        char *storename = mdf_get_value(qe->nodein, "name", NULL);
+        if (storename) {
+            DommeStore *plan = dommeStoreCreate();
+            if (!_store_node(me, storename, &plan->name, &plan->basedir)) {
+                mtc_mt_warn("can't find library %s", storename);
+                dommeStoreFree(plan);
+                break;
+            }
+
+            err = dommeLoadFromFilef(plan, "%s%smusic.db", me->libroot, plan->basedir);
+            if (err) {
+                dommeStoreFree(me->plan);
+                TRACE_NOK_MT(err);
+                break;
+            }
+
+            char *key;
+            DommeFile *mfile;
+            MHASH_ITERATE(plan->mfiles, key, mfile) {
+                snprintf(filename, sizeof(filename), "%s%s%s", plan->basedir, mfile->dir, mfile->name);
+
+                _push(me, filename, NULL, NULL, NULL, SYNC_RAWFILE, qe->client->binary);
+            }
+
+            dommeStoreFree(plan);
         }
     }
     break;
