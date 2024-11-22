@@ -36,6 +36,7 @@ typedef enum {
     CMD_HOME_INFO,
     CMD_STORE_CREATE,           /* 创建媒体库 */
     CMD_STORE_RENAME,
+    CMD_STORE_SET_DEFAULT,
 } COMMAND_HDARDWAR;
 
 typedef enum {

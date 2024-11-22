@@ -50,6 +50,23 @@ bool storeExist(char *storename)
     return false;
 }
 
+bool storeIsDefault(char *storename)
+{
+    if (!storename) return false;
+
+    BeeEntry *be = beeFind(FRAME_AUDIO);
+    if (!be) return false;
+
+    AudioEntry *me = (AudioEntry*)be;
+
+    DommeStore *plan;
+    MLIST_ITERATE(me->plans, plan) {
+        if (!strcmp(plan->name, storename)) return plan->moren;
+    }
+
+    return false;
+}
+
 /*
  * 创建了媒体库，需要加入媒体库列表，生成空的媒体数据库，并监控该媒体库下所有新增和删除事件
  */
@@ -130,6 +147,30 @@ bool storeRename(char *namesrc, char *namedst)
     }
 
     return false;
+}
+
+bool storeSetDefault(char *storename)
+{
+    if (!storename) return false;
+
+    BeeEntry *be = beeFind(FRAME_AUDIO);
+    if (!be) {
+        mtc_mt_warn("can't find audio backend");
+        return false;
+    }
+
+    AudioEntry *me = (AudioEntry*)be;
+
+    DommeStore *plan;
+    MLIST_ITERATE(me->plans, plan) {
+        if (!strcmp(plan->name, storename)) {
+            me->act = ACT_STOP;
+            me->plan = plan;
+            plan->moren = true;
+        } else plan->moren = false;
+    }
+
+    return true;
 }
 
 /*

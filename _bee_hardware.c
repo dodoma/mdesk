@@ -482,11 +482,63 @@ bool hdw_process(BeeEntry *be, QueueEntry *qe)
         sendlen = packetACKFill(packet, qe->seqnum, qe->command, true, NULL);
     }
     break;
+    case CMD_STORE_SET_DEFAULT:
+    {
+        packet = packetMessageInit(qe->client->bufsend, LEN_PACKET_NORMAL);
+
+        char *libroot = mdf_get_value(g_config, "libraryRoot", NULL);
+        char *libname = mdf_get_value(qe->nodein, "name", NULL);
+        if (!libroot || !libname) break;
+
+        if (!storeExist(libname)) break;
+
+        if (storeIsDefault(libname)) {
+            sendlen = packetACKFill(packet, qe->seqnum, qe->command, false, "已为默认媒体库");
+            break;
+        }
+
+        /* 修改媒体库配置文件 */
+        snprintf(filename, sizeof(filename), "%sconfig.json", libroot);
+
+        MDF *libconfig;
+        mdf_init(&libconfig);
+        err = mdf_json_import_file(libconfig, filename);
+        if (err != MERR_OK) {
+            TRACE_NOK_MT(err);
+            mdf_destroy(&libconfig);
+            break;
+        }
+
+        MDF *cnode = mdf_node_child(libconfig);
+        while (cnode) {
+            char *name = mdf_get_value(cnode, "name", NULL);
+
+            if (name && !strcmp(name, libname)) mdf_set_bool_value(cnode, "default", true);
+            else mdf_set_bool_value(cnode, "default", false);
+
+            cnode = mdf_node_next(cnode);
+        }
+
+        err = mdf_json_export_file(libconfig, filename);
+        if (err != MERR_OK) {
+            TRACE_NOK_MT(err);
+            mdf_destroy(&libconfig);
+            break;
+        }
+
+        /* 通知 audio */
+        storeSetDefault(libname);
+
+        sendlen = packetACKFill(packet, qe->seqnum, qe->command, true, NULL);
+    }
+    break;
     default:
         break;
     }
 
-    if (packet && sendlen > 0) {
+    if (packet) {
+        if (sendlen == 0) packetACKFill(packet, qe->seqnum, qe->command, false, "音源操作失败");
+
         packetCRCFill(packet);
         SSEND(qe->client->base.fd, qe->client->bufsend, sendlen);
     }
