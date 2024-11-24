@@ -92,6 +92,29 @@ static struct watcher* _add_watch(DommeStore *plan, char *subdir, int efd, struc
     return arg;
 }
 
+static void _remove_watch(AudioEntry *me, DommeStore *plan)
+{
+    if (!plan || !me->seeds) return;
+
+    struct watcher *node = me->seeds;
+    struct watcher *prev = NULL, *next = NULL;
+    while (node) {
+        next = node->next;
+
+        if (node->plan == plan) {
+            if (node == me->seeds) me->seeds = next;
+
+            inotify_rm_watch(me->efd, node->wd);
+            mos_free(node->path);
+            mos_free(node);
+
+            if (prev) prev->next = next;
+        } else prev = node;
+
+        node = next;
+    }
+}
+
 /*
  * /home/pi/music/Steve Ray Vaughan/Track01.mp3
  */
@@ -239,7 +262,7 @@ static void* _index_music(void *arg)
  * 遍历媒体库目录，重新建立/首次更新 索引
  * 有更新，返回true, 否则返回false
  */
-bool indexerScan(const char *basedir, DommeStore *plan, bool fresh)
+bool indexerScan(DommeStore *plan, bool fresh)
 {
     char filename[PATH_MAX];
     MLIST *filesa, *filesb, *filesc;
@@ -247,7 +270,7 @@ bool indexerScan(const char *basedir, DommeStore *plan, bool fresh)
     char *key;
     bool ret = fresh; /* 对于新建索引，返回 true */
 
-    mtc_mt_dbg("scan library %s...", basedir);
+    mtc_mt_dbg("scan library %s...", plan->basedir);
 
     mlist_init(&filesa, free);  /* 保存数据库中原有文件列表 */
     mlist_init(&filesb, free);  /* 保存数据库中没有，媒体库中有的文件列表 （新增） */
@@ -258,7 +281,7 @@ bool indexerScan(const char *basedir, DommeStore *plan, bool fresh)
      */
     if (!fresh) {
         MHASH_ITERATE(plan->mfiles, key, mfile) {
-            snprintf(filename, sizeof(filename), "%s%s%s", basedir, mfile->dir, mfile->name);
+            snprintf(filename, sizeof(filename), "%s%s%s", plan->basedir, mfile->dir, mfile->name);
             mlist_append(filesa, strdup(filename));
 
             if (access(filename, F_OK) != 0) mlist_append(filesc, strdup(filename));
@@ -321,6 +344,47 @@ bool indexerScan(const char *basedir, DommeStore *plan, bool fresh)
     mlist_destroy(&filesc);
 
     return ret;
+}
+
+/*
+ * 遍历媒体库子目录，将子目录下所有媒体文件加入媒体库 [删除子目录下媒体数据库]
+ * 常用于监控新剪切过来的媒体目录
+ */
+void indexerScanSubdirectory(DommeStore *plan, const char *subpath)
+{
+    MLIST *files;
+
+    mtc_mt_dbg("scan library %s with subdirectory %s...", plan->name, subpath);
+
+    char filename[PATH_MAX];
+    snprintf(filename, sizeof(filename), "%s%smusic.db", plan->basedir, subpath);
+    if (remove(filename) != 0) mtc_mt_warn("remove %s failure %s", filename, strerror(errno));
+
+    mlist_init(&files, free);
+
+    _scan_for_files(plan, subpath, NULL, files);
+
+    if (mlist_length(files) > 0) {
+        mtc_mt_dbg("got %d files to index", mlist_length(files));
+
+        struct indexer_arg arga = {plan, files};
+
+        int pnum = sysconf(_SC_NPROCESSORS_ONLN);
+        if (pnum <= 0) pnum = 2;
+        pthread_t **threads = mos_calloc(pnum, sizeof(pthread_t*));
+        for (int i = 0; i < pnum; i++) {
+            threads[i] = mos_calloc(1, sizeof(pthread_t));
+            pthread_create(threads[i], NULL, _index_music, &arga);
+        }
+
+        for (int i = 0; i < pnum; i++) {
+            pthread_join(*threads[i], NULL);
+            mos_free(threads[i]);
+        }
+        mos_free(threads);
+    }
+
+    mlist_destroy(&files);
 }
 
 /*
@@ -412,13 +476,35 @@ struct watcher* indexerWatch(int efd, struct watcher *seeds, AudioEntry *me)
                             if (prev) prev->next = next;
 
                             break;
-                        }
+                        } else prev = arg;
 
-                        /* 没用到 else，相比 mdlist 有进步 */
-                        prev = arg;
                         arg = next;
                     }
-                }
+                } else if (event->mask & IN_MOVED_TO) {
+                    mtc_mt_dbg("%s%s MOVED IN directory %s", plan->basedir, arg->path, event->name);
+
+                    if (!mlist_search(plan->dirs, &key, _strcompare)) {
+                        mtc_mt_dbg("append dir %s", pathname);
+                        mlist_append(plan->dirs, strdup(pathname));
+                    }
+
+                    int wd = inotify_add_watch(efd, fullname,
+                                               IN_CREATE | IN_DELETE | IN_CLOSE_WRITE | IN_MOVED_TO);
+                    if (wd == -1) {
+                        mtc_mt_warn("can't watch %s %s", fullname, strerror(errno));
+                    } else {
+                        struct watcher *item = mos_calloc(1, sizeof(struct watcher));
+                        item->wd = wd;
+                        item->plan = plan;
+                        item->path = strdup(pathname);
+                        item->next = seeds;
+                        seeds = item;
+                    }
+
+                    indexerScanSubdirectory(plan, pathname);
+
+                    arg->on_dirty = g_ctime;
+                } else mtc_mt_warn("%s unknown event %s %d", arg->path, event->name, event->mask);
             } else if (event->len > 0) {
                 /* 文件动作 */
                 char filename[PATH_MAX];
@@ -631,12 +717,12 @@ void* dommeIndexerStart(void *arg)
             err = dommeLoadFromFile(filename, plan);
             if (err == MERR_OK) {
                 /* 保持首次同步 */
-                if (indexerScan(basedir, plan, false)) {
+                if (indexerScan(plan, false)) {
                     dommeStoreDumpFilef(plan, "%smusic.db", basedir);
                     dommeStoreReplace(me, plan);
                 } else dommeStoreFree(plan);
             } else {
-                if (indexerScan(basedir, plan, true)) {
+                if (indexerScan(plan, true)) {
                     dommeStoreDumpFilef(plan, "%smusic.db", basedir);
                     dommeStoreReplace(me, plan);
                 } else {

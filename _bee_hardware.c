@@ -532,6 +532,116 @@ bool hdw_process(BeeEntry *be, QueueEntry *qe)
         sendlen = packetACKFill(packet, qe->seqnum, qe->command, true, NULL);
     }
     break;
+    case CMD_STORE_DELETE:
+    {
+        packet = packetMessageInit(qe->client->bufsend, LEN_PACKET_NORMAL);
+
+        char *libroot = mdf_get_value(g_config, "libraryRoot", NULL);
+        char *libname = mdf_get_value(qe->nodein, "name", NULL);
+        bool force = mdf_get_bool_value(qe->nodein, "force", false);
+        if (!libroot || !libname) break;
+
+        if (!storeExist(libname)) break;
+
+        if (storeIsDefault(libname)) {
+            sendlen = packetACKFill(packet, qe->seqnum, qe->command, false, "不能删除默认媒体库");
+            break;
+        }
+
+        if (!storeDelete(libname, force)) {
+            sendlen = packetACKFill(packet, qe->seqnum, qe->command, false, "媒体库不为空");
+            break;
+        }
+
+        /* 修改媒体库配置文件 */
+        snprintf(filename, sizeof(filename), "%sconfig.json", libroot);
+
+        MDF *libconfig;
+        mdf_init(&libconfig);
+        err = mdf_json_import_file(libconfig, filename);
+        if (err != MERR_OK) {
+            TRACE_NOK_MT(err);
+            mdf_destroy(&libconfig);
+            break;
+        }
+
+        MDF *cnode = mdf_node_child(libconfig);
+        while (cnode) {
+            char *name = mdf_get_value(cnode, "name", NULL);
+
+            if (name && !strcmp(name, libname)) {
+                mdf_remove_me(cnode);
+                break;
+            }
+
+            cnode = mdf_node_next(cnode);
+        }
+
+        err = mdf_json_export_file(libconfig, filename);
+        if (err != MERR_OK) {
+            TRACE_NOK_MT(err);
+            mdf_destroy(&libconfig);
+            break;
+        }
+
+        sendlen = packetACKFill(packet, qe->seqnum, qe->command, true, NULL);
+    }
+    break;
+    case CMD_STORE_MERGE:
+    {
+        packet = packetMessageInit(qe->client->bufsend, LEN_PACKET_NORMAL);
+
+        char *libroot = mdf_get_value(g_config, "libraryRoot", NULL);
+        char *libsrc = mdf_get_value(qe->nodein, "src", NULL);
+        char *libdst = mdf_get_value(qe->nodein, "dst", NULL);
+        if (!libroot || !libsrc || !libdst) break;
+
+        if (!storeExist(libsrc) || !storeExist(libdst)) break;
+
+        if (storeIsDefault(libsrc)) {
+            sendlen = packetACKFill(packet, qe->seqnum, qe->command, false, "不能合并默认媒体库");
+            break;
+        }
+
+        if (!storeMerge(libsrc, libdst)) {
+            sendlen = packetACKFill(packet, qe->seqnum, qe->command, false, "合并媒体库失败");
+            break;
+        }
+
+        /* 修改媒体库配置文件 */
+        snprintf(filename, sizeof(filename), "%sconfig.json", libroot);
+
+        MDF *libconfig;
+        mdf_init(&libconfig);
+        err = mdf_json_import_file(libconfig, filename);
+        if (err != MERR_OK) {
+            TRACE_NOK_MT(err);
+            mdf_destroy(&libconfig);
+            break;
+        }
+
+        MDF *cnode = mdf_node_child(libconfig);
+        while (cnode) {
+            char *name = mdf_get_value(cnode, "name", NULL);
+
+            if (name && !strcmp(name, libsrc)) {
+                mdf_remove_me(cnode);
+                break;
+            }
+
+            cnode = mdf_node_next(cnode);
+        }
+
+        err = mdf_json_export_file(libconfig, filename);
+        if (err != MERR_OK) {
+            TRACE_NOK_MT(err);
+            mdf_destroy(&libconfig);
+            break;
+        }
+
+        sendlen = packetACKFill(packet, qe->seqnum, qe->command, true, NULL);
+    }
+    break;
     default:
         break;
     }

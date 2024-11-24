@@ -107,7 +107,7 @@ MERR* storeCreated(char *storename)
     plan->basedir = strdup(fullpath);
     plan->moren = mdf_get_bool_value(snode, "default", false);
 
-    if (indexerScan(plan->basedir, plan, true)) {
+    if (indexerScan(plan, true)) {
         dommeStoreDumpFilef(plan, "%smusic.db", plan->basedir);
         dommeStoreReplace(me, plan);
     } else {
@@ -186,7 +186,35 @@ bool storeDelete(char *storename, bool force)
 
     AudioEntry *me = (AudioEntry*)be;
 
-    return true;
+    if (!strcmp(me->plan->name, storename)) {
+        mtc_mt_warn("can'd delete default store");
+        return false;
+    }
+
+    DommeStore *plan;
+    MLIST_ITERATE(me->plans, plan) {
+        if (!strcmp(plan->name, storename)) {
+            if (plan->count_track == 0) {
+                /* 删除空的媒体库 */
+                _remove_watch(me, plan);
+                mos_rmrf(plan->basedir);
+            } else {
+                if (!force) {
+                    mtc_mt_dbg("don't delete nonempty store");
+                    return false;
+                } else {
+                    /* 删除非空媒体库 */
+                    _remove_watch(me, plan);
+                    mos_rmrf(plan->basedir);
+                }
+            }
+
+            mlist_delete(me->plans, _moon_i);
+            return true;
+        }
+    }
+
+    return false;
 }
 
 /*
@@ -194,6 +222,8 @@ bool storeDelete(char *storename, bool force)
  */
 bool storeMerge(char *src, char *dest)
 {
+    if (!src || !dest || !strcmp(src, dest)) return false;
+
     BeeEntry *be = beeFind(FRAME_AUDIO);
     if (!be) {
         mtc_mt_warn("can't find audio backend");
@@ -202,5 +232,41 @@ bool storeMerge(char *src, char *dest)
 
     AudioEntry *me = (AudioEntry*)be;
 
-    return true;
+    if (!strcmp(me->plan->name, src)) {
+        mtc_mt_warn("can't merge default store %s %s", me->plan->name, src);
+        return false;
+    }
+
+    /* 源媒体库中 媒体文件 移动至目标媒体库 */
+    DommeStore *plansrc = NULL, *plandest = NULL, *plan;
+    MLIST_ITERATE(me->plans, plan) {
+        if (!strcmp(plan->name, src)) plansrc = plan;
+        else if (!strcmp(plan->name, dest)) plandest = plan;
+    }
+
+    if (!plansrc || !plandest) {
+        mtc_mt_warn("can't find store %s %s", src, dest);
+        return false;
+    }
+
+    if (plansrc->count_track > 0) {
+        /* /home/pi/music/2024-11-20 16:09:40[/] */
+        char *libroot = mdf_get_value(g_config, "libraryRoot", NULL);
+        if (!libroot) return false;
+
+        size_t len = strlen(libroot);
+        if (strlen(plansrc->basedir) <= len) return false;
+        if (strncmp(plansrc->basedir, libroot, len)) return false;
+        char *srcpath = plansrc->basedir + len;
+
+        char pathname[PATH_MAX];
+        snprintf(pathname, sizeof(pathname), "%s%s", plandest->basedir, srcpath);
+        mtc_mt_dbg("rename %s ===> %s", plansrc->basedir, pathname);
+        if (rename(plansrc->basedir, pathname) != 0) {
+            mtc_mt_warn("rename %s to %s failure %s", plansrc->basedir, pathname, strerror(errno));
+            return false;
+        }
+    }
+
+    return storeDelete(src, true);
 }
