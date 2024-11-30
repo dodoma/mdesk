@@ -392,7 +392,7 @@ bool hdw_process(BeeEntry *be, QueueEntry *qe)
         struct tm tm;
         localtime_r(&tv.tv_sec, &tm);
         strftime(storepath, 20, "%Y-%m-%d %H:%M:%S", &tm);
-        storepath[24] = 0;
+        storepath[19] = 0;
 
         snprintf(destpath, sizeof(destpath), "%s%s/", plan->basedir, storepath);
 
@@ -435,7 +435,7 @@ bool hdw_process(BeeEntry *be, QueueEntry *qe)
         struct tm tm;
         localtime_r(&tv.tv_sec, &tm);
         strftime(storepath, 20, "%Y-%m-%d %H:%M:%S", &tm);
-        storepath[24] = 0;
+        storepath[19] = 0;
 
         snprintf(filename, sizeof(filename), "%s%s", libroot, storepath);
         if (!mos_mkdir(filename, 0755)) {

@@ -112,7 +112,7 @@ MERR* storeCreated(char *storename)
         dommeStoreReplace(me, plan);
     } else {
         dommeStoreFree(plan);
-        RETURN(merr_raise(MERR_ASSERT, "scan %s %s failure", storename, plan->basedir));
+        RETURN(merr_raise(MERR_ASSERT, "scan %s failure", storename));
     }
 
     /* 一家人使用，_add_watch 就不改名字了 */

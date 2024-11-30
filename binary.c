@@ -23,7 +23,11 @@ static bool _parse_packet(NetBinaryNode *client, MessagePacket *packet)
             uint8_t *buf = packet->data;
 
             int idlen = strlen((char*)buf);
-            strncpy(clientid, (char*)buf, idlen > LEN_CLIENTID ? LEN_CLIENTID: idlen);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-truncation"
+            strncpy(clientid, (char*)buf, idlen > LEN_CLIENTID ? LEN_CLIENTID : idlen);
+#pragma GCC diagnostic pop
+            clientid[LEN_CLIENTID-1] = 0;
             buf += idlen;
             buf++;              /* '\0' */
 

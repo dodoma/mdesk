@@ -683,7 +683,7 @@ static void* _player(void *arg)
 {
     AudioEntry *me = (AudioEntry*)arg;
     AudioTrack *track = me->track;
-    int rv;
+    int rv = 0;
 
     int loglevel = mtc_level_str2int(mdf_get_value(g_config, "trace.worker", "debug"));
     mtc_mt_initf("player", loglevel, g_log_tostdout ? "-"  :"%slog/%s.log", g_location, "player");
