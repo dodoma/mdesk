@@ -85,7 +85,7 @@ static bool _parse_recv(NetBinaryNode *client, uint8_t *recvbuf, size_t recvlen)
              * 要处理的话，也要根据 client->buf 将其赋为 0 或 recvlen - packet->length
              */
             return _parse_recv(client, recvbuf, recvlen - LEN_IDIOT);
-        }
+        } else mos_free(client->buf);
     } else {
         /* command packet ? */
         if (recvlen < LEN_HEADER + 4) PARTLY_PACKET;
@@ -107,7 +107,7 @@ static bool _parse_recv(NetBinaryNode *client, uint8_t *recvbuf, size_t recvlen)
                     size_t exceed = recvlen - packet->length;
                     memmove(recvbuf, recvbuf + packet->length, exceed);
                     return _parse_recv(client, recvbuf, exceed);
-                }
+                } else mos_free(client->buf);
             }
         } else {
             /* not my bussiness */
