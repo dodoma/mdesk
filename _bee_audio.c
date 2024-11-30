@@ -67,8 +67,9 @@ typedef struct {
     bool running;
 
     pthread_t indexer;          /* indexer */
-    struct watcher *seeds;      /* 多线程间对seed无释放操作，暂不加锁 */
+    struct watcher *seeds;
     int efd;
+    pthread_mutex_t index_lock;
 
     snd_pcm_t *pcm;
     snd_mixer_elem_t *mixer;
@@ -964,6 +965,7 @@ void audio_stop(BeeEntry *be)
     pthread_join(me->indexer, NULL);
 
     pthread_mutex_destroy(&me->lock);
+    pthread_mutex_destroy(&me->index_lock);
 
     mos_free(me->track);
     mlist_destroy(&me->plans);
@@ -1038,6 +1040,7 @@ BeeEntry* _start_audio()
 
     pthread_create(&me->worker, NULL, _player, me);
 
+    pthread_mutex_init(&me->index_lock, NULL);
     pthread_create(&me->indexer, NULL, dommeIndexerStart, me);
 
     g_timers = timerAdd(g_timers, 2, false, me, _push_trackinfo);

@@ -14,6 +14,6 @@ if [ "$ACTION" = "add" ] && [ -n "$DEVNAME" ] && [ -n "$ID_FS_TYPE" ]; then
         mkdir -p /media/udisk
 
         # https://wiki.archlinux.org/title/Udev#Mounting_drives_in_rules
-        grep -q "/media/udisk" /proc/mounts || $MOUNT --no-block --collect $DEVNAME /media/udisk >> $LOGFILE 2>&1
+        grep -q "/media/udisk" /proc/mounts || $MOUNT --options=iocharset=utf8 --no-block --collect $DEVNAME /media/udisk >> $LOGFILE 2>&1
     fi
 fi

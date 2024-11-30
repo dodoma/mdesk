@@ -7,6 +7,8 @@
  * 诸如读写音频文件、建立索引、文件比对、硬件设置、读写数据库、播放控制等，分成了不同的业务线程处理
  */
 
+#include "_bee_audio.h"
+
 typedef enum {
     SYNC_RAWFILE = 0,           /* libroot 下的文件 */
     SYNC_STORE_FILE,            /* 某个 library 下的文件 */
@@ -89,12 +91,13 @@ void onUstickMount(char *name);
 /* 注意，请严格控制，对返回结果只读不写 */
 MLIST* mediaStoreList();
 
-bool storeExist(char *storename);
+DommeStore* storeExist(char *storename);
 bool storeIsDefault(char *storename);
 MERR* storeCreated(char *storename);
 bool storeRename(char *namesrc, char *namedst);
 bool storeSetDefault(char *storename);
 bool storeDelete(char *storename, bool force);
 bool storeMerge(char *src, char *dest);
+int storeMediaCopy(DommeStore *plan, char *pathfrom, char *pathto, bool recursive);
 
 #endif  /* ___BEE_H__ */

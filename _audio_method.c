@@ -33,21 +33,21 @@ static int _store_compare(const void *anode, void *key)
     return strcmp(mdf_get_value((MDF*)anode, "name", ""), (char*)key);
 }
 
-bool storeExist(char *storename)
+DommeStore* storeExist(char *storename)
 {
-    if (!storename) return false;
+    if (!storename) return NULL;
 
     BeeEntry *be = beeFind(FRAME_AUDIO);
-    if (!be) return false;
+    if (!be) return NULL;
 
     AudioEntry *me = (AudioEntry*)be;
 
     DommeStore *plan;
     MLIST_ITERATE(me->plans, plan) {
-        if (!strcmp(plan->name, storename)) return true;
+        if (!strcmp(plan->name, storename)) return plan;
     }
 
-    return false;
+    return NULL;
 }
 
 bool storeIsDefault(char *storename)
@@ -115,8 +115,10 @@ MERR* storeCreated(char *storename)
         RETURN(merr_raise(MERR_ASSERT, "scan %s %s failure", storename, plan->basedir));
     }
 
-    /* 对现存seeds内容无修改操作，暂不加锁，另外，一家人使用，_add_watch 就不改名字了 */
+    /* 一家人使用，_add_watch 就不改名字了 */
+    pthread_mutex_lock(&me->index_lock);
     me->seeds = _add_watch(plan, "", me->efd, me->seeds);
+    pthread_mutex_unlock(&me->index_lock);
 
 #undef RETURN
 
@@ -178,6 +180,8 @@ bool storeSetDefault(char *storename)
  */
 bool storeDelete(char *storename, bool force)
 {
+    if (!storename) return false;
+
     BeeEntry *be = beeFind(FRAME_AUDIO);
     if (!be) {
         mtc_mt_warn("can't find audio backend");
@@ -186,17 +190,34 @@ bool storeDelete(char *storename, bool force)
 
     AudioEntry *me = (AudioEntry*)be;
 
-    if (!strcmp(me->plan->name, storename)) {
-        mtc_mt_warn("can'd delete default store");
-        return false;
+    DommeStore *plan;
+    DommeStore *plandft = NULL;
+    MLIST_ITERATE(me->plans, plan) {
+        if (plan->moren) {
+            /* 默认媒体库不能删除 */
+            if (!strcmp(plan->name, storename)) {
+                mtc_mt_warn("can'd delete default store");
+                return false;
+            } else {
+                plandft = plan;
+                break;
+            }
+        }
     }
 
-    DommeStore *plan;
     MLIST_ITERATE(me->plans, plan) {
         if (!strcmp(plan->name, storename)) {
+            /* 删除当前媒体库时的切换 */
+            if (me->plan == plan) {
+                me->act = ACT_STOP;
+                me->plan = plandft;
+            }
+
             if (plan->count_track == 0) {
                 /* 删除空的媒体库 */
+                pthread_mutex_lock(&me->index_lock);
                 _remove_watch(me, plan);
+                pthread_mutex_unlock(&me->index_lock);
                 mos_rmrf(plan->basedir);
             } else {
                 if (!force) {
@@ -204,7 +225,9 @@ bool storeDelete(char *storename, bool force)
                     return false;
                 } else {
                     /* 删除非空媒体库 */
+                    pthread_mutex_lock(&me->index_lock);
                     _remove_watch(me, plan);
+                    pthread_mutex_unlock(&me->index_lock);
                     mos_rmrf(plan->basedir);
                 }
             }
@@ -232,14 +255,11 @@ bool storeMerge(char *src, char *dest)
 
     AudioEntry *me = (AudioEntry*)be;
 
-    if (!strcmp(me->plan->name, src)) {
-        mtc_mt_warn("can't merge default store %s %s", me->plan->name, src);
-        return false;
-    }
-
     /* 源媒体库中 媒体文件 移动至目标媒体库 */
-    DommeStore *plansrc = NULL, *plandest = NULL, *plan;
+    DommeStore *plansrc = NULL, *plandest = NULL, *plandft = NULL, *plan;
     MLIST_ITERATE(me->plans, plan) {
+        if (plan->moren) plandft = plan;
+
         if (!strcmp(plan->name, src)) plansrc = plan;
         else if (!strcmp(plan->name, dest)) plandest = plan;
     }
@@ -247,6 +267,18 @@ bool storeMerge(char *src, char *dest)
     if (!plansrc || !plandest) {
         mtc_mt_warn("can't find store %s %s", src, dest);
         return false;
+    }
+
+    /* 默认媒体库不能合并 */
+    if (plansrc->moren) {
+        mtc_mt_warn("can't merge default store %s %s", me->plan->name, src);
+        return false;
+    }
+
+    /* 合并当前媒体库时的切换 */
+    if (me->plan == plansrc) {
+        me->act = ACT_STOP;
+        me->plan = plandft;
     }
 
     if (plansrc->count_track > 0) {
@@ -269,4 +301,64 @@ bool storeMerge(char *src, char *dest)
     }
 
     return storeDelete(src, true);
+}
+
+/*
+ * make sure pathfrom and pathto both end with '/'
+ */
+int storeMediaCopy(DommeStore *plan, char *pathfrom, char *pathto, bool recursive)
+{
+    char srcfile[PATH_MAX], destfile[PATH_MAX];
+    char mediaID[LEN_DOMMEID];
+
+    if (!pathfrom || !pathto) return 0;
+
+    DIR *dir = opendir(pathfrom);
+    if (!dir) return 0;
+
+    if (!mos_mkdir(pathto, 0755)) return 0;
+
+    int trackcount = 0;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
+
+        if (entry->d_type == DT_REG) {
+            snprintf(srcfile, sizeof(srcfile), "%s%s", pathfrom, entry->d_name);
+
+            mp3dec_map_info_t map_info;
+            if (mp3dec_open_file(srcfile, &map_info) == 0) {
+                if (mp3dec_detect_buf(map_info.buffer, map_info.size) != 0) {
+                    mp3dec_close_file(&map_info);
+                    continue;
+                }
+            } else continue;
+
+            memset(mediaID, 0x0, LEN_DOMMEID);
+            mp3_md5_get_buf(map_info.buffer, map_info.size, mediaID);
+
+            mp3dec_close_file(&map_info);
+
+            mtc_mt_dbg("%s %s", srcfile, mediaID);
+            if (dommeGetFile(plan, mediaID)) {
+                mtc_mt_dbg("file %s exist, skip", srcfile);
+                continue;
+            }
+
+            /* 拷贝媒体文件 */
+            snprintf(destfile, sizeof(destfile), "%s%s", pathto, entry->d_name);
+            if (mos_copyfile(srcfile, destfile, 0644)) trackcount++;
+            else mtc_mt_warn("copy %s => %s failure %s", srcfile, destfile, strerror(errno));
+        } else if (entry->d_type == DT_DIR && recursive) {
+            char fullfrom[PATH_MAX], fullto[PATH_MAX];
+            snprintf(fullfrom, sizeof(fullfrom), "%s%s/", pathfrom, entry->d_name);
+            snprintf(fullto, sizeof(fullto), "%s%s/", pathto, entry->d_name);
+
+            trackcount += storeMediaCopy(plan, fullfrom, fullto, recursive);
+        }
+    }
+
+    closedir(dir);
+
+    return trackcount;
 }

@@ -3,6 +3,7 @@
 
 typedef struct {
     BeeEntry base;
+    uint8_t *bufsend;
 } HardwareEntry;
 
 struct diskinfo {
@@ -10,6 +11,13 @@ struct diskinfo {
     uint64_t occupy;
     uint64_t remain;
     float percent;         /* 使用占比 0.64 */
+};
+
+struct fsentity {
+    int type;
+    char *name;
+
+    struct fsentity *next;
 };
 
 struct ustick {
@@ -198,10 +206,58 @@ static char* _interface_ipv4(char *iface)
     return ip;
 }
 
-bool hdw_process(BeeEntry *be, QueueEntry *qe)
+struct fsentity* _media_info_get(const char *path, struct fsentity *nodes, int *mediacount)
 {
     char filename[PATH_MAX];
-    //HardwareEntry *me = (HardwareEntry*)be;
+    if (!path) return NULL;
+
+    DIR *dir = opendir(path);
+    if (!dir) return NULL;
+
+    int tracknum = 0;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
+
+        if (entry->d_type == DT_REG) {
+            snprintf(filename, sizeof(filename), "%s%s", path, entry->d_name);
+
+            mp3dec_map_info_t map_info;
+            if (mp3dec_open_file(filename, &map_info) == 0) {
+                if (mp3dec_detect_buf(map_info.buffer, map_info.size) != 0) {
+                    mp3dec_close_file(&map_info);
+                    continue;
+                }
+
+                mp3dec_close_file(&map_info);
+            } else continue;
+        } else if (entry->d_type != DT_DIR) continue;
+
+        /* 剩下的都是有用的 */
+        struct fsentity *item = mos_calloc(1, sizeof(struct fsentity));
+        item->name = strdup(entry->d_name);
+
+        if (entry->d_type == DT_DIR) item->type = 0;
+        else if (entry->d_type == DT_REG) {
+            item->type = 1;
+            tracknum++;
+        }
+
+        item->next = nodes;
+        nodes = item;
+    }
+
+    closedir(dir);
+
+    if (mediacount) *mediacount = tracknum;
+
+    return nodes;
+}
+
+bool hdw_process(BeeEntry *be, QueueEntry *qe)
+{
+    HardwareEntry *me = (HardwareEntry*)be;
+    char filename[PATH_MAX];
     MessagePacket *packet = NULL;
     size_t sendlen = 0;
     MERR *err;
@@ -209,6 +265,7 @@ bool hdw_process(BeeEntry *be, QueueEntry *qe)
     mtc_mt_dbg("process command %d", qe->command);
 
     memset(filename, 0x0, PATH_MAX);
+    memset(me->bufsend, 0x0, CONTRL_PACKET_MAX_LEN);
 
     switch (qe->command) {
     case CMD_WIFI_SET:
@@ -270,6 +327,79 @@ bool hdw_process(BeeEntry *be, QueueEntry *qe)
         sendlen = packetResponseFill(packet, qe->seqnum, qe->command, true, NULL, qe->nodeout);
     }
     break;
+    case CMD_UDISK_INFO:
+    {
+        packet = packetMessageInit(qe->client->bufsend, LEN_PACKET_NORMAL);
+
+        mdf_makesure_endwithc(qe->nodein, "directory", '/');
+        char *pathname = mdf_get_value(qe->nodein, "directory", NULL);
+        if (!pathname) break;
+        while (*pathname == '/') pathname++;
+
+        int tracknum = 0;
+        snprintf(filename, sizeof(filename), "/media/udisk/%s", pathname);
+        struct fsentity *item = _media_info_get(filename, NULL, &tracknum);
+        mtc_mt_noise("scan %s with %d media files", filename, tracknum);
+        if (!item) break;
+
+        mdf_set_int_value(qe->nodeout, "trackCount", tracknum);
+        MDF *snode = mdf_get_or_create_node(qe->nodeout, "nodes");
+
+        struct fsentity *next = NULL;
+        while (item) {
+            next = item->next;
+
+            MDF *cnode = mdf_insert_node(snode, NULL, -1);
+            mdf_set_value(cnode, "name", item->name);
+            mdf_set_int_value(cnode, "type", item->type);
+
+            mos_free(item->name);
+            mos_free(item);
+            item = next;
+        }
+        mdf_object_2_array(snode, NULL);
+
+        packet = packetMessageInit(me->bufsend, CONTRL_PACKET_MAX_LEN);
+        sendlen = packetResponseFill(packet, qe->seqnum, qe->command, true, NULL, qe->nodeout);
+        packetCRCFill(packet);
+        SSEND(qe->client->base.fd, me->bufsend, sendlen);
+
+        /* 使用了 me->bufsend，直接 return */
+        return true;
+    }
+    break;
+    case CMD_UDISK_COPY:
+    {
+        char srcpath[PATH_MAX] = {0}, destpath[PATH_MAX] = {0};
+
+        /* 拷贝往往漫长，UI也有繁忙标识，此处不让用户关注命令结果 */
+        mdf_makesure_endwithc(qe->nodein, "path", '/');
+        char *pathname = mdf_get_value(qe->nodein, "path", NULL);
+        char *libname  = mdf_get_value(qe->nodein, "name", NULL);
+        bool recursive = mdf_get_bool_value(qe->nodein, "recursive", false);
+        if (!pathname || !libname) break;
+
+        while (*pathname == '/') pathname++;
+        snprintf(srcpath, sizeof(srcpath), "/media/udisk/%s", pathname);
+
+        DommeStore *plan = storeExist(libname);
+        if (!plan) break;
+
+        /* 以当前时间，创建目标媒体库媒体目录 */
+        struct timeval tv;
+        gettimeofday(&tv, NULL);
+        char storepath[20] = {0}; /* 2024-11-20 11:05:12 */
+        struct tm tm;
+        localtime_r(&tv.tv_sec, &tm);
+        strftime(storepath, 20, "%Y-%m-%d %H:%M:%S", &tm);
+        storepath[24] = 0;
+
+        snprintf(destpath, sizeof(destpath), "%s%s/", plan->basedir, storepath);
+
+        int tracknum = storeMediaCopy(plan, srcpath, destpath, recursive);
+        mtc_mt_dbg("%d tracks copied to %s", tracknum, libname);
+    }
+    break;
     case CMD_STORE_CREATE:
     {
         /*
@@ -302,8 +432,9 @@ bool hdw_process(BeeEntry *be, QueueEntry *qe)
         struct timeval tv;
         gettimeofday(&tv, NULL);
         char storepath[20] = {0}; /* 2024-11-20 11:05:12 */
-        struct tm *tm = localtime(&tv.tv_sec);
-        strftime(storepath, 20, "%Y-%m-%d %H:%M:%S", tm);
+        struct tm tm;
+        localtime_r(&tv.tv_sec, &tm);
+        strftime(storepath, 20, "%Y-%m-%d %H:%M:%S", &tm);
         storepath[24] = 0;
 
         snprintf(filename, sizeof(filename), "%s%s", libroot, storepath);
@@ -647,7 +778,8 @@ bool hdw_process(BeeEntry *be, QueueEntry *qe)
     }
 
     if (packet) {
-        if (sendlen == 0) packetACKFill(packet, qe->seqnum, qe->command, false, "音源操作失败");
+        if (sendlen == 0)
+            sendlen = packetACKFill(packet, qe->seqnum, qe->command, false, "音源操作失败");
 
         packetCRCFill(packet);
         SSEND(qe->client->base.fd, qe->client->bufsend, sendlen);
@@ -658,7 +790,11 @@ bool hdw_process(BeeEntry *be, QueueEntry *qe)
 
 void hdw_stop(BeeEntry *be)
 {
+    HardwareEntry *me = (HardwareEntry*)be;
+
     mtc_mt_dbg("stop worker %s", be->name);
+
+    mos_free(me->bufsend);
 }
 
 BeeEntry* _start_hardware()
@@ -667,6 +803,7 @@ BeeEntry* _start_hardware()
 
     me->base.process = hdw_process;
     me->base.stop = hdw_stop;
+    me->bufsend = mos_calloc(1, CONTRL_PACKET_MAX_LEN);
 
     return (BeeEntry*)me;
 }

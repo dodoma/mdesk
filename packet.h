@@ -34,6 +34,8 @@ typedef enum {
 typedef enum {
     CMD_WIFI_SET = 0,
     CMD_HOME_INFO,
+    CMD_UDISK_INFO,             /* 查看 U 盘目录下媒体信息 */
+    CMD_UDISK_COPY,             /* 拷贝 U 盘目录下媒体文件 */
     CMD_STORE_CREATE,           /* 创建媒体库 */
     CMD_STORE_RENAME,
     CMD_STORE_SET_DEFAULT,

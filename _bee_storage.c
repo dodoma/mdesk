@@ -515,6 +515,7 @@ bool storage_process(BeeEntry *be, QueueEntry *qe)
         err = dommeLoadFromFilef(me->plan, "%s%smusic.db", me->libroot, me->storepath);
         if (err) {
             dommeStoreFree(me->plan);
+            me->plan = NULL;
             TRACE_NOK_MT(err);
             break;
         }

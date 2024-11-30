@@ -96,8 +96,10 @@ static void _remove_watch(AudioEntry *me, DommeStore *plan)
 {
     if (!plan || !me->seeds) return;
 
-    struct watcher *node = me->seeds;
+    mtc_mt_dbg("remove plan %s", plan->name);
+
     struct watcher *prev = NULL, *next = NULL;
+    struct watcher *node = me->seeds;
     while (node) {
         next = node->next;
 
@@ -207,8 +209,12 @@ static void* _index_music(void *arg)
                     mfile->length = (uint32_t)audioinfo.samples / audioinfo.hz + 1;
                     mfile->touched = false;
 
-                    mtc_mt_noise("%s %s %s %s %s", mfile->id, sartist, stitle, salbum, strack);
-                } else mtc_mt_dbg("%s not valid mp3 file", filename);
+                    //mtc_mt_noise("%s %s %s %s %s", mfile->id, sartist, stitle, salbum, strack);
+                    mtc_mt_noise("%s %s", filename, mfile->id);
+                } else {
+                    mtc_mt_dbg("%s not valid mp3 file, REMOVE", filename);
+                    remove(filename);
+                }
             } else mtc_mt_warn("%s not music", filename);
 
             mp3dec_close_file(&map_info);
@@ -570,8 +576,8 @@ struct watcher* indexerWatch(int efd, struct watcher *seeds, AudioEntry *me)
                                 plan->count_track++;
 
                                 arg->on_dirty = g_ctime;
-                            } else mtc_mt_warn("%s mp3 info get failure", filename);
-                        } else mtc_mt_warn("%s not mp3", filename);
+                            } else mtc_mt_warn("%s not valid mp3 file", filename);
+                        } else mtc_mt_warn("%s not music", filename);
 
                         mp3dec_close_file(&map_info);
                     }
@@ -767,10 +773,13 @@ void* dommeIndexerStart(void *arg)
 
             if (poll_num > 0) {
                 if (fds[0].revents & POLLIN) {
+                    pthread_mutex_lock(&me->index_lock);
                     me->seeds = indexerWatch(me->efd, me->seeds, me);
+                    pthread_mutex_unlock(&me->index_lock);
                 }
             } else if (poll_num == 0) {
                 /* timeout */
+                pthread_mutex_lock(&me->index_lock);
                 struct watcher *item = me->seeds;
                 while (item) {
                     if (item->on_dirty && g_ctime > item->on_dirty && g_ctime - item->on_dirty > 29) {
@@ -784,6 +793,7 @@ void* dommeIndexerStart(void *arg)
 
                     item = item->next;
                 }
+                pthread_mutex_unlock(&me->index_lock);
             }
         }
     } else mtc_mt_err("no directory need to watch");

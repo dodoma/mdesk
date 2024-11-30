@@ -2,11 +2,12 @@
     "location": "/home/pi/mdesk/",
     "libraryRoot": "/home/pi/music/",
     "trace": {
-        "tostdout": true,
+        "tostdout": false,      // 日志过多输出至 stdout 竟然会卡死 sshd，只能重启设备
         "dumpsend": false,
         "dumprecv": false,
         "main": "debug",
         "audio": "debug",
+        "worker": "noise"
     },
     "server": {
         "daemon": false,
