@@ -9,7 +9,6 @@ typedef enum {
     NET_CONTRL = 0,
     NET_BINARY,
     NET_HORN,
-    NET_TIMER,
     NET_CLIENT_CONTRL,
     NET_CLIENT_BINARY,
 } NetNodeType;

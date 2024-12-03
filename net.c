@@ -12,6 +12,7 @@
 #define MAXEVENTS 512
 #define BROADCAST_PERIOD 1
 
+static pthread_t m_timer;
 static bool dad_call_me_back = false;
 
 static void _sig_exit(int sig)
@@ -61,7 +62,7 @@ static void _timer_handler(int fd)
     time_t now = time(NULL);
     if (now <= g_ctime) return;
 
-    //mtc_mt_dbg("tick tock");
+    //mtc_mt_foo("tick tock");
 
     g_ctime = now;
     g_elapsed = now - g_starton;
@@ -83,6 +84,42 @@ static void _timer_handler(int fd)
 
         t = n;
     }
+}
+
+static void* el_timer(void *arg)
+{
+    int timerfd = *(int*)arg;
+
+    fd_set readset;
+    int maxfd, rv;
+
+    int loglevel = mtc_level_str2int(mdf_get_value(g_config, "trace.main", "debug"));
+    mtc_mt_initf("timer", loglevel, g_log_tostdout ? "-" : "%s/log/timer.log", g_location);
+
+    mtc_mt_dbg("I am timer routine with timerfd %d", timerfd);
+
+    while (!dad_call_me_back) {
+        FD_ZERO(&readset);
+
+        if (timerfd > 0) {
+            FD_SET(timerfd, &readset);
+            maxfd = timerfd;
+        }
+
+        struct timeval tv = {.tv_sec = 0, .tv_usec = 100000};
+        rv = select(maxfd + 1, &readset, NULL, NULL, &tv);
+
+        if (rv == -1 && errno != EINTR) {
+            mtc_mt_err("select error %s", strerror(errno));
+            break;
+        } else if (rv == 0) continue;
+
+        if (FD_ISSET(timerfd, &readset)) _timer_handler(timerfd);
+    }
+
+    mtc_mt_dbg("timer done");
+
+    return NULL;
 }
 
 static int _new_connection(int efd, int sfd)
@@ -176,8 +213,9 @@ MERR* netExposeME()
     if (g_efd < 0) return merr_raise(MERR_ASSERT, "epoll create failure");
 
     /* timer fd */
-    fd = timerfd_create(CLOCK_REALTIME, 0);
-    if (fd == -1) return merr_raise(MERR_ASSERT, "timer fd create failure");
+    static int timerfd;
+    timerfd = timerfd_create(CLOCK_REALTIME, 0);
+    if (timerfd == -1) return merr_raise(MERR_ASSERT, "timer fd create failure");
 
     struct timespec now;
     if (clock_gettime(CLOCK_REALTIME, &now) == -1) return merr_raise(MERR_ASSERT, "get time");
@@ -187,16 +225,10 @@ MERR* netExposeME()
     new_value.it_interval.tv_sec = 1;
     //new_value.it_interval.tv_nsec = 100000000ul;
     new_value.it_interval.tv_nsec = 0;
-    if (timerfd_settime(fd, TFD_TIMER_ABSTIME, &new_value, NULL) == -1)
+    if (timerfd_settime(timerfd, TFD_TIMER_ABSTIME, &new_value, NULL) == -1)
         return merr_raise(MERR_ASSERT, "timer set time");
 
-    NetNode *nitem = mos_calloc(1, sizeof(NetNode));
-    nitem->fd = fd;
-    nitem->type = NET_TIMER;
-    ev.events = EPOLLIN;
-    ev.data.ptr = nitem;
-    rv = epoll_ctl(g_efd, EPOLL_CTL_ADD, nitem->fd, &ev);
-    if(rv == -1) return merr_raise(MERR_ASSERT, "add fd failure");
+    pthread_create(&m_timer, NULL, el_timer, &timerfd);
 
     /* fd_horn */
     fd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -240,7 +272,7 @@ MERR* netExposeME()
     rv = listen(fd, 1024);
     if (rv < 0) return merr_raise(MERR_ASSERT, "listen contrl failure");
 
-    nitem = mos_calloc(1, sizeof(NetNode));
+    NetNode *nitem = mos_calloc(1, sizeof(NetNode));
     nitem->fd = fd;
     nitem->type = NET_CONTRL;
     ev.events = EPOLLIN | EPOLLET;
@@ -322,9 +354,6 @@ MERR* netExposeME()
                 //mtc_mt_dbg("receive broadcast response");
                 //((NetHornNode*)nitem)->ping = g_ctime;
                 break;
-            case NET_TIMER:
-                _timer_handler(nitem->fd);
-                break;
             case NET_CLIENT_CONTRL:
                 clientRecv(nitem->fd, (NetClientNode*)nitem);
                 break;
@@ -341,6 +370,8 @@ MERR* netExposeME()
 
     mos_free(events);
     close(g_efd);
+    pthread_cancel(m_timer);
+    pthread_join(m_timer, NULL);
 
     return MERR_OK;
 }
