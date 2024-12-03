@@ -340,7 +340,7 @@ mp3dec_map_info_t* mp3_cover_open(char *filename, char **mime, uint8_t **imgbuf,
     }
 
     if (!_seek_cover(mapinfo->buffer, mapinfo->size, mime, imgbuf, imgsize)) {
-        mtc_mt_warn("%s cover empty", filename);
+        //mtc_mt_warn("%s cover empty", filename);
         mp3dec_close_file(mapinfo);
         mos_free(mapinfo);
         return NULL;

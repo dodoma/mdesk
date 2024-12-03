@@ -107,7 +107,7 @@ MERR* storeCreated(char *storename)
     plan->basedir = strdup(fullpath);
     plan->moren = mdf_get_bool_value(snode, "default", false);
 
-    if (indexerScan(plan, true)) {
+    if (indexerScan(plan, true, me)) {
         dommeStoreDumpFilef(plan, "%smusic.db", plan->basedir);
         dommeStoreReplace(me, plan);
     } else {
@@ -339,11 +339,10 @@ int storeMediaCopy(DommeStore *plan, char *pathfrom, char *pathto, bool recursiv
 
             mp3dec_close_file(&map_info);
 
-            mtc_mt_dbg("%s %s", srcfile, mediaID);
             if (dommeGetFile(plan, mediaID)) {
                 mtc_mt_dbg("file %s exist, skip", srcfile);
                 continue;
-            }
+            } else mtc_mt_dbg("COPY %s %s", srcfile, mediaID);
 
             /* 拷贝媒体文件 */
             snprintf(destfile, sizeof(destfile), "%s%s", pathto, entry->d_name);

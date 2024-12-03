@@ -152,6 +152,99 @@ static bool _extract_filename(char *filename, DommeStore *plan, char **path, cha
     return true;
 }
 
+/* 告诉所有在线用户哥在忙着索引文件 */
+static void _onStoreIndexing(AudioEntry *me)
+{
+    if (!me || mlist_length(me->base.users) == 0) return;
+
+    uint8_t bufsend[LEN_IDIOT];
+    packetIdiotFill(bufsend, IDIOT_BUSY_INDEXING);
+
+    NetClientNode *client;
+    MLIST_ITERATE(me->base.users, client) {
+        if (!client->base.dropped) {
+            SSEND(client->base.fd, bufsend, LEN_IDIOT);
+        }
+    }
+}
+
+/* 告诉所有在线用户索引弄完了 */
+static void _onStoreIndexDone(AudioEntry *me)
+{
+    if (!me || mlist_length(me->base.users) == 0) return;
+
+    uint8_t bufsend[LEN_IDIOT];
+    packetIdiotFill(bufsend, IDIOT_FREE);
+
+    NetClientNode *client;
+    MLIST_ITERATE(me->base.users, client) {
+        if (!client->base.dropped) {
+            SSEND(client->base.fd, bufsend, LEN_IDIOT);
+        }
+    }
+}
+
+/* 给所有的在线用户推送music.db */
+static void _onStoreChange(AudioEntry *me, DommeStore *plan)
+{
+    if (!me || mlist_length(me->base.users) == 0 || !plan || !plan->basedir) return;
+
+    char *libroot = mdf_get_value(g_config, "libraryRoot", "");
+    int rlen = strlen(libroot), blen = strlen(plan->basedir);
+    if (rlen >= blen) return;
+
+    char *storepath = plan->basedir + rlen;
+
+    struct stat fs;
+    char filename[PATH_MAX] = {0};
+    snprintf(filename, sizeof(filename), "%smusic.db", plan->basedir);
+    if (stat(filename, &fs) != 0) {
+        mtc_mt_warn("stat %s failure %s", filename, strerror(errno));
+        return;
+    }
+
+    FILE *fp = fopen(filename, "rb");
+    if (!fp) {
+        mtc_mt_warn("open %s failure %s", filename, strerror(errno));
+        return;
+    }
+
+    NetClientNode *client;
+    MLIST_ITERATE(me->base.users, client) {
+        if (!client->base.dropped && client->binary) {
+            NetBinaryNode *bnode = client->binary;
+
+            mtc_mt_dbg("push %smusic.db to %d", plan->basedir, bnode->base.fd);
+
+            /*
+             * CMD_SYNC
+             */
+            char nameWithPath[PATH_MAX];
+            snprintf(nameWithPath, sizeof(nameWithPath), "%smusic.db", storepath);
+
+            uint8_t bufsend[LEN_PACKET_NORMAL];
+            MessagePacket *packet = packetMessageInit(bufsend, LEN_PACKET_NORMAL);
+            size_t sendlen = packetBFileFill(packet, nameWithPath, fs.st_size);
+            packetCRCFill(packet);
+
+            SSEND(bnode->base.fd, bufsend, sendlen);
+
+            /*
+             * file contents
+             */
+            fseek(fp, 0, SEEK_SET);
+            uint8_t buf[4096] = {0};
+            size_t len = 0;
+            while ((len = fread(buf, 1, sizeof(buf), fp)) > 0) {
+                SSEND(bnode->base.fd, buf, len);
+            }
+
+        }
+    }
+
+    fclose(fp);
+}
+
 static void* _index_music(void *arg)
 {
     struct indexer_arg *arga = arg;
@@ -210,7 +303,7 @@ static void* _index_music(void *arg)
                     mfile->touched = false;
 
                     //mtc_mt_noise("%s %s %s %s %s", mfile->id, sartist, stitle, salbum, strack);
-                    mtc_mt_noise("%s %s", filename, mfile->id);
+                    mtc_mt_dbg("%s %s", filename, mfile->id);
                 } else {
                     mtc_mt_dbg("%s not valid mp3 file, REMOVE", filename);
                     remove(filename);
@@ -268,7 +361,7 @@ static void* _index_music(void *arg)
  * 遍历媒体库目录，重新建立/首次更新 索引
  * 有更新，返回true, 否则返回false
  */
-bool indexerScan(DommeStore *plan, bool fresh)
+bool indexerScan(DommeStore *plan, bool fresh, AudioEntry *me)
 {
     char filename[PATH_MAX];
     MLIST *filesa, *filesb, *filesc;
@@ -301,6 +394,9 @@ bool indexerScan(DommeStore *plan, bool fresh)
 
     if (mlist_length(filesb) > 0) {
         mtc_mt_dbg("got %d files to index", mlist_length(filesb));
+
+        _onStoreIndexing(me);
+
         /*
          * 3. 探测文件
          */
@@ -314,13 +410,28 @@ bool indexerScan(DommeStore *plan, bool fresh)
             pthread_create(threads[i], NULL, _index_music, &arga);
         }
 
-        for (int i = 0; i < pnum; i++) {
-            pthread_join(*threads[i], NULL);
-            mos_free(threads[i]);
+        int joinnum = 0;
+        while (joinnum < pnum) {
+            for (int i = 0; i < pnum; i++) {
+                if (threads[i]) {
+                    struct timespec timeout;
+                    clock_gettime(CLOCK_REALTIME, &timeout);
+                    timeout.tv_sec += 3;
+                    int rv = pthread_timedjoin_np(*threads[i], NULL ,&timeout);
+                    if (rv == 0) {
+                        free(threads[i]);
+                        threads[i] = NULL;
+
+                        joinnum++;
+                    } else _onStoreIndexing(me);
+                }
+            }
         }
         mos_free(threads);
 
         ret = true;
+
+        _onStoreIndexDone(me);
     }
 
     /*
@@ -460,6 +571,7 @@ struct watcher* indexerWatch(int efd, struct watcher *seeds, AudioEntry *me)
                     } else {
                         struct watcher *item = mos_calloc(1, sizeof(struct watcher));
                         item->wd = wd;
+                        item->on_dirty = 0;
                         item->plan = plan;
                         item->path = strdup(pathname);
                         item->next = seeds;
@@ -501,6 +613,7 @@ struct watcher* indexerWatch(int efd, struct watcher *seeds, AudioEntry *me)
                     } else {
                         struct watcher *item = mos_calloc(1, sizeof(struct watcher));
                         item->wd = wd;
+                        item->on_dirty = 0;
                         item->plan = plan;
                         item->path = strdup(pathname);
                         item->next = seeds;
@@ -575,6 +688,11 @@ struct watcher* indexerWatch(int efd, struct watcher *seeds, AudioEntry *me)
                                 mhash_insert(plan->mfiles, mfile->id, mfile);
                                 plan->count_track++;
 
+                                if (arg->on_dirty == 0) {
+                                    /* 通知UI */
+                                    _onStoreIndexing(me);
+                                }
+
                                 arg->on_dirty = g_ctime;
                             } else mtc_mt_warn("%s not valid mp3 file", filename);
                         } else mtc_mt_warn("%s not music", filename);
@@ -620,67 +738,6 @@ void watcherFree(struct watcher *arg)
     }
 }
 
-/* 给所有的在线用户推送music.db */
-static void _OnStoreChange(AudioEntry *me, DommeStore *plan)
-{
-    if (!me || mlist_length(me->base.users) == 0 || !plan || !plan->basedir) return;
-
-    char *libroot = mdf_get_value(g_config, "libraryRoot", "");
-    int rlen = strlen(libroot), blen = strlen(plan->basedir);
-    if (rlen >= blen) return;
-
-    char *storepath = plan->basedir + rlen;
-
-    struct stat fs;
-    char filename[PATH_MAX] = {0};
-    snprintf(filename, sizeof(filename), "%smusic.db", plan->basedir);
-    if (stat(filename, &fs) != 0) {
-        mtc_mt_warn("stat %s failure %s", filename, strerror(errno));
-        return;
-    }
-
-    FILE *fp = fopen(filename, "rb");
-    if (!fp) {
-        mtc_mt_warn("open %s failure %s", filename, strerror(errno));
-        return;
-    }
-
-    NetClientNode *client;
-    MLIST_ITERATE(me->base.users, client) {
-        if (!client->base.dropped && client->binary) {
-            NetBinaryNode *bnode = client->binary;
-
-            mtc_mt_dbg("push %smusic.db to %d", plan->basedir, bnode->base.fd);
-
-            /*
-             * CMD_SYNC
-             */
-            char nameWithPath[PATH_MAX];
-            snprintf(nameWithPath, sizeof(nameWithPath), "%smusic.db", storepath);
-
-            uint8_t bufsend[LEN_PACKET_NORMAL];
-            MessagePacket *packet = packetMessageInit(bufsend, LEN_PACKET_NORMAL);
-            size_t sendlen = packetBFileFill(packet, nameWithPath, fs.st_size);
-            packetCRCFill(packet);
-
-            SSEND(bnode->base.fd, bufsend, sendlen);
-
-            /*
-             * file contents
-             */
-            fseek(fp, 0, SEEK_SET);
-            uint8_t buf[4096] = {0};
-            size_t len = 0;
-            while ((len = fread(buf, 1, sizeof(buf), fp)) > 0) {
-                SSEND(bnode->base.fd, buf, len);
-            }
-
-        }
-    }
-
-    fclose(fp);
-}
-
 void* dommeIndexerStart(void *arg)
 {
     AudioEntry *me = (AudioEntry*)arg;
@@ -723,12 +780,12 @@ void* dommeIndexerStart(void *arg)
             err = dommeLoadFromFile(filename, plan);
             if (err == MERR_OK) {
                 /* 保持首次同步 */
-                if (indexerScan(plan, false)) {
+                if (indexerScan(plan, false, me)) {
                     dommeStoreDumpFilef(plan, "%smusic.db", basedir);
                     dommeStoreReplace(me, plan);
                 } else dommeStoreFree(plan);
             } else {
-                if (indexerScan(plan, true)) {
+                if (indexerScan(plan, true, me)) {
                     dommeStoreDumpFilef(plan, "%smusic.db", basedir);
                     dommeStoreReplace(me, plan);
                 } else {
@@ -782,13 +839,22 @@ void* dommeIndexerStart(void *arg)
                 pthread_mutex_lock(&me->index_lock);
                 struct watcher *item = me->seeds;
                 while (item) {
-                    if (item->on_dirty && g_ctime > item->on_dirty && g_ctime - item->on_dirty > 29) {
+                    if (item->on_dirty && g_ctime > item->on_dirty && g_ctime - item->on_dirty > 19) {
                         dommeStoreDumpFilef(item->plan, "%smusic.db", item->plan->basedir);
 
                         /* 通知所有已连接客户端，更新媒体数据库 */
-                        _OnStoreChange(me, item->plan);
+                        _onStoreChange(me, item->plan);
 
+                        _onStoreIndexDone(me);
                         item->on_dirty = 0;
+
+                        /* 避免重复 dump */
+                        struct watcher *next = item->next;
+                        while (next) {
+                            if (next->plan == item->plan) next->on_dirty = 0;
+
+                            next = next->next;
+                        }
                     }
 
                     item = item->next;

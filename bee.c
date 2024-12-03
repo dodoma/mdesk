@@ -110,7 +110,7 @@ static void* _worker(void *arg)
     QueueManager *queue = be->op_queue;
 
     int loglevel = mtc_level_str2int(mdf_get_value(g_config, "trace.worker", "debug"));
-    mtc_mt_initf(be->name, loglevel, g_log_tostdout ? "-"  :"%s/log/%s.log", g_location, be->name);
+    mtc_mt_initf(be->name, loglevel, g_log_tostdout ? "-" : "%s/log/%s.log", g_location, be->name);
 
     mtc_mt_dbg("I am your business %s worker No.%d", be->name, be->id);
 

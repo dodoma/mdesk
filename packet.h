@@ -12,6 +12,8 @@ typedef enum {
     IDIOT_CONNECT,              /* contrl socket 申请 clientid */
     IDIOT_PLAY_STEP,
     IDIOT_USTICK_MOUNT,
+    IDIOT_FREE,                 /*  闲着 */
+    IDIOT_BUSY_INDEXING,
 } IDIOT_INDICATOR;
 
 typedef enum {
