@@ -22,12 +22,87 @@ static void _sig_exit(int sig)
     dad_call_me_back = true;
 }
 
+static bool _fill_serversa(const char *host, int port, struct sockaddr_in *srvsa)
+{
+    struct in_addr ia;
+    int rv = inet_pton(AF_INET, host, &ia);
+    if (rv <= 0) {
+        struct hostent *he = gethostbyname(host);
+        if (!he) {
+            mtc_mt_err("get host by name %s failure", host);
+            return false;
+        }
+        ia.s_addr = *( (in_addr_t *) (he->h_addr_list[0]) );
+    }
+
+    srvsa->sin_family = AF_INET;
+    srvsa->sin_port = htons(port);
+    srvsa->sin_addr.s_addr = ia.s_addr;
+
+    return true;
+}
+
+static bool _try_connect(struct sockaddr_in *srvsa)
+{
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return false;
+
+    if (fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK) != 0) return false;
+
+    int rv = connect(fd, (struct sockaddr*)srvsa, sizeof(struct sockaddr_in));
+    if (rv < 0) {
+        if (errno == EINPROGRESS) {
+            fd_set fdset;
+            FD_ZERO(&fdset);
+            FD_SET(fd, &fdset);
+
+            struct timeval tv = {.tv_sec = 5, .tv_usec = 0};
+            if (select(fd + 1, NULL, &fdset, NULL, &tv) > 0) {
+                int valopt;
+                socklen_t slen = sizeof(int);
+                getsockopt(fd, SOL_SOCKET, SO_ERROR, (void*)&valopt, &slen);
+                if (valopt != 0) {
+                    mtc_mt_warn("connected failure");
+                    return false;
+                }
+            } else {
+                mtc_mt_warn("connect timeout");
+                return false;
+            }
+        } else {
+            mtc_mt_warn("connect failure");
+            return false;
+        }
+    }
+
+    close(fd);
+
+    return true;
+}
+
 static bool _broadcast_me(void *data)
 {
     NetHornNode *nitem = (NetHornNode*)data;
 
     if (!clientOn()) {
         mtc_mt_noise("broadcast me");
+
+        static bool online = false;
+        static struct sockaddr_in srvsa = {.sin_family = AF_INET, .sin_port = 0};
+
+        char *host = mdf_get_value(g_config, "mocserver.host", "mbox.net.cn");
+        int port = mdf_get_int_value(g_config, "mocserver.port", 4001);
+
+        if (srvsa.sin_port == 0) _fill_serversa(host, port, &srvsa);
+
+        if (!online && _try_connect(&srvsa)) online = true;
+
+        char cpuid[14] = {0};
+        memcpy(cpuid, g_cpuid, sizeof(cpuid));
+        if (!online) {
+            /* 连不上网的音源发 'b' 类广播包 */
+            cpuid[0] = 'b';
+        }
 
         /* 长时间没收到客户端心跳了，广播自己 */
         struct sockaddr_in dest;
@@ -40,15 +115,15 @@ static bool _broadcast_me(void *data)
         dest.sin_addr.s_addr = INADDR_BROADCAST;
 
         MessagePacket *packet = packetMessageInit(sendbuf, sizeof(sendbuf));
-        sendlen = packetBroadcastFill(packet, g_cpuid,
+        sendlen = packetBroadcastFill(packet, cpuid,
                                       mdf_get_int_value(g_config, "server.port_contrl", 4001),
                                       mdf_get_int_value(g_config, "server.port_binary", 4002));
         packetCRCFill(packet);
 
-        //MSG_DUMP_MT("SEND: ", sendbuf, sendlen);
+        MSG_DUMP_MT(g_dumpsend, "SEND: ", sendbuf, sendlen);
 
         int rv = sendto(nitem->base.fd, sendbuf, sendlen, 0, (struct sockaddr*)&dest, destlen);
-        if (rv != sendlen) mtc_mt_err("send failue %d %d", sendlen, rv);
+        if (rv != sendlen) mtc_mt_err("send failue %d %d %s", nitem->base.fd, rv, strerror(errno));
     }
 
     return true;
@@ -230,6 +305,28 @@ MERR* netExposeME()
 
     pthread_create(&m_timer, NULL, el_timer, &timerfd);
 
+    /* 优选有线网络 */
+    int tmpfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (tmpfd < 0) return merr_raise(MERR_ASSERT, "create detect socket failure");
+
+    struct ifreq ifr;
+    strncpy(ifr.ifr_name, "eth0", IFNAMSIZ-1);
+    ifr.ifr_addr.sa_family = AF_INET;
+    rv = ioctl(tmpfd, SIOCGIFADDR, &ifr);
+    if (rv != 0) {
+        /* 尝试无线网络 */
+        strncpy(ifr.ifr_name, "wlan0", IFNAMSIZ-1);
+        ifr.ifr_addr.sa_family = AF_INET;
+        rv = ioctl(tmpfd, SIOCGIFADDR, &ifr);
+        if (rv != 0) {
+            close(tmpfd);
+            return merr_raise(MERR_ASSERT, "网卡初始化错误");
+        }
+    }
+
+    mtc_mt_dbg("bind to %s", ifr.ifr_name);
+    close(tmpfd);
+
     /* fd_horn */
     fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) return merr_raise(MERR_ASSERT, "create horn socket failure");
@@ -242,7 +339,8 @@ MERR* netExposeME()
     struct sockaddr_in srvsa;
     srvsa.sin_family = AF_INET;
     srvsa.sin_port = htons(mdf_get_int_value(g_config, "server.broadcast_src", 4101));
-    srvsa.sin_addr.s_addr = INADDR_ANY;
+    //srvsa.sin_addr.s_addr = INADDR_ANY;
+    srvsa.sin_addr.s_addr = ((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr.s_addr;
     rv = bind(fd, (const struct sockaddr*)&srvsa, sizeof(srvsa));
     if (rv != 0) return merr_raise(MERR_ASSERT, "bind broadcast failure");
 
@@ -265,7 +363,8 @@ MERR* netExposeME()
 
     srvsa.sin_family = AF_INET;
     srvsa.sin_port = htons(mdf_get_int_value(g_config, "server.port_contrl", 4001));
-    srvsa.sin_addr.s_addr = INADDR_ANY;
+    //srvsa.sin_addr.s_addr = INADDR_ANY;
+    srvsa.sin_addr.s_addr = ((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr.s_addr;
     rv = bind(fd, (const struct sockaddr*)&srvsa, sizeof(srvsa));
     if (rv != 0) return merr_raise(MERR_ASSERT, "bind contrl failure");
 
@@ -289,7 +388,8 @@ MERR* netExposeME()
 
     srvsa.sin_family = AF_INET;
     srvsa.sin_port = htons(mdf_get_int_value(g_config, "server.port_binary", 4002));
-    srvsa.sin_addr.s_addr = INADDR_ANY;
+    //srvsa.sin_addr.s_addr = INADDR_ANY;
+    srvsa.sin_addr.s_addr = ((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr.s_addr;
     rv = bind(fd, (const struct sockaddr*)&srvsa, sizeof(srvsa));
     if (rv != 0) return merr_raise(MERR_ASSERT, "bind binary failure");
 

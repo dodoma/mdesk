@@ -1,18 +1,23 @@
 {
     "location": "/home/pi/mdesk/",
     "libraryRoot": "/home/pi/music/",
+    "mocserver": {
+        "host": "avm.mbox.net.cn",
+        //"host": "120.76.206.21",
+        "port": 6379
+    },
     "trace": {
-        "tostdout": false,      // 日志过多输出至 stdout 竟然会卡死 sshd，只能重启设备
+        "tostdout": true,      // 日志输出至 stdout 竟然会卡死 sshd
         "dumpsend": false,
         "dumprecv": false,
         "main": "debug",
         "audio": "debug",
-        "worker": "noise"
+        "worker": "debug"
     },
     "server": {
         "daemon": false,
-        "port_contrl": 4001,    // tcp websocket socket
-        "port_binary": 4002,    // ssl tcp websocket
+        "port_contrl": 4001,    // tcp control socket
+        "port_binary": 4002,    // tcp binary websocket
         "broadcast_src": 4101,  // udp broadcast source port
         "broadcast_dst": 4102,  // udp broadcast destnation port
     }

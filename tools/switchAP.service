@@ -1,0 +1,12 @@
+[Unit]
+Description=Switch to AP Mode when network nok
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/home/pi/mdesk/tools/switchAP.sh
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

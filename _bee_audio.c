@@ -151,7 +151,7 @@ static void _set_normalized_volume(snd_mixer_elem_t *elem, float volume)
     //it scales logarithmically
     value = lrint(6000.0 * log10(volume)) + max;
 
-    snd_mixer_selem_set_playback_dB(elem, 0, value, 0);
+    snd_mixer_selem_set_playback_dB_all(elem, value, 0);
 }
 
 static bool _in_playlist(MLIST *playlist, char *id)

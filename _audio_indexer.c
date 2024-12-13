@@ -143,7 +143,7 @@ static bool _extract_filename(char *filename, DommeStore *plan, char **path, cha
     }
 
     char dir[PATH_MAX], *ptr = dir;
-    snprintf(dir, sizeof(dir), "%.*s", q - p + 1, p);
+    snprintf(dir, sizeof(dir), "%.*s", (int)(q - p + 1), p);
     char *addr = mlist_search(plan->dirs, &ptr, _strcompare);
     if (!addr) return false;
 

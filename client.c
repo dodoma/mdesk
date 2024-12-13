@@ -131,8 +131,7 @@ static bool _parse_recv(NetClientNode *client, uint8_t *recvbuf, size_t recvlen)
         case IDIOT_PING:
             //mtc_mt_dbg("ping received");
             sendlen = packetPONGFill(sendbuf, sizeof(sendbuf));
-            //SSEND(client->base.fd, sendbuf, sendlen);
-            send(client->base.fd, sendbuf, sendlen, MSG_NOSIGNAL);
+            SSEND(client->base.fd, sendbuf, sendlen);
             break;
         case IDIOT_PONG:
             break;
@@ -141,8 +140,7 @@ static bool _parse_recv(NetClientNode *client, uint8_t *recvbuf, size_t recvlen)
             sendlen = packetConnectFill(outpacket, client->id);
             packetCRCFill(outpacket);
 
-            //SSEND((NetNode*)client, sendbuf, sendlen);
-            send(client->base.fd, sendbuf, sendlen, MSG_NOSIGNAL);
+            SSEND(client->base.fd, sendbuf, sendlen);
             break;
         default:
             mtc_mt_warn("unsupport idot packet %d", ipacket->idiot);

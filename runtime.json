@@ -1,6 +1,4 @@
 {
-    "deviceName": "默认音源",
-    "autoplay": false,
-    "apname": "",
-    "appasswd": "",
+  "deviceName": "默认音源", 
+  "autoplay": false
 }

@@ -1,0 +1,16 @@
+[Unit]
+Description=Admit the Vip Of Music
+After=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+ExecStart=/home/pi/mdesk/sucker /home/pi/mdesk/config.json
+ExecStop=/bin/kill -s TERM $MAINPID
+ExecStartPost=/bin/bash -c "echo $MAINPID > /tmp/avm.pid"
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

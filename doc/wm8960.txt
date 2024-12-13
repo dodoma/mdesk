@@ -1,0 +1,18 @@
+1. 取消主板声卡
+
+$ sudo nano /boot/firmware/config.txt
+
+dtparam=audio=on
+=>
+#dtparam=audio=on
+
+$ git clone https://github.com/waveshare/WM8960-Audio-HAT
+$ cd WM8960-Audio-HAT
+
+$ sudo ./install.sh
+$ sudo reboot
+
+重启后检查声卡是否装载成功
+
+pi@raspberrypi:~ $ sudo dkms status
+wm8960-soundcard, 1.0, 4.19.58-v7l+, armv7l: installed

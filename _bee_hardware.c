@@ -269,12 +269,51 @@ bool hdw_process(BeeEntry *be, QueueEntry *qe)
 
     switch (qe->command) {
     case CMD_WIFI_SET:
-        mtc_mt_dbg("set wifi ... %s", mdf_get_value(qe->nodein, "name", "unknownName"));
-        /* TODO business logic */
+    {
         packet = packetMessageInit(qe->client->bufsend, LEN_PACKET_NORMAL);
-        sendlen = packetACKFill(packet, qe->seqnum, qe->command, true, NULL);
 
-        break;
+        char *apname = mdf_get_value(qe->nodein, "ap", NULL);
+        char *passwd = mdf_get_value(qe->nodein, "passwd", NULL);
+        char *sourceName = mdf_get_value(qe->nodein, "name", "默认音源");
+        if (!apname || !passwd) break;
+
+        mdf_set_value(g_runtime, "deviceName", sourceName);
+        mdf_json_export_filef(g_runtime, "%sruntime.json", g_location);
+
+        MDF *datanode;
+        mdf_init(&datanode);
+        mdf_set_value(datanode, "apname", apname);
+        mdf_set_value(datanode, "appasswd", passwd);
+
+        MCS *tpl;
+        snprintf(filename, sizeof(filename), "%stemplate/wpa_supplicant.conf", g_location);
+        err = mcs_parse_file(filename, NULL, NULL, &tpl);
+        if (err != MERR_OK) {
+            TRACE_NOK_MT(err);
+
+            mdf_destroy(&datanode);
+            break;
+        }
+
+        err = mcs_rend(tpl, datanode, "/etc/wpa_supplicant/wpa_supplicant.conf");
+        if (err != MERR_OK) {
+            TRACE_NOK_MT(err);
+
+            mcs_destroy(&tpl);
+            mdf_destroy(&datanode);
+            break;
+        }
+
+        mcs_destroy(&tpl);
+        mdf_destroy(&datanode);
+
+        mtc_mt_dbg("switch wifi to %s, reboot...", apname);
+
+        sleep(1);
+
+        system("sudo reboot");
+    }
+    break;
     case CMD_HOME_INFO:
     {
         char *libroot = mdf_get_value(g_config, "libraryRoot", "/");
