@@ -693,6 +693,7 @@ static void* _player(void *arg)
     char filename[PATH_MAX];
     snprintf(filename, sizeof(filename), "%sconnect.mp3", g_location);
     _play_raw(me, filename, NULL);
+    if (mdf_get_bool_value(g_runtime, "autoplay", false)) me->act = ACT_PLAY;
 
     while (me->running) {
         struct timespec timeout;

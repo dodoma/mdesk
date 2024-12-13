@@ -43,6 +43,7 @@ typedef enum {
     CMD_STORE_SET_DEFAULT,
     CMD_STORE_DELETE,
     CMD_STORE_MERGE,
+    CMD_SET_AUTOPLAY,
 } COMMAND_HDARDWAR;
 
 typedef enum {

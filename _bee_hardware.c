@@ -321,7 +321,7 @@ bool hdw_process(BeeEntry *be, QueueEntry *qe)
 
         mdf_set_value(qe->nodeout, "deviceID", g_cpuid);
         mdf_set_value(qe->nodeout, "deviceName", mdf_get_value(g_runtime, "deviceName", ""));
-        mdf_set_bool_value(qe->nodeout, "autoPlay", mdf_get_bool_value(g_runtime, "autoPlay", false));
+        mdf_set_bool_value(qe->nodeout, "autoPlay", mdf_get_bool_value(g_runtime, "autoplay", false));
         mdf_set_value(qe->nodeout, "shareLocation", _interface_ipv4("wlan0"));
 
         mdf_set_value(qe->nodeout, "capacity", _size_2_string(fsinfo.capacity));
@@ -808,6 +808,17 @@ bool hdw_process(BeeEntry *be, QueueEntry *qe)
             mdf_destroy(&libconfig);
             break;
         }
+
+        sendlen = packetACKFill(packet, qe->seqnum, qe->command, true, NULL);
+    }
+    break;
+    case CMD_SET_AUTOPLAY:
+    {
+        packet = packetMessageInit(qe->client->bufsend, LEN_PACKET_NORMAL);
+
+        bool autoplay = mdf_get_bool_value(qe->nodein, "autoPlay", false);
+        mdf_set_bool_value(g_runtime, "autoplay", autoplay);
+        mdf_json_export_filef(g_runtime, "%sruntime.json", g_location);
 
         sendlen = packetACKFill(packet, qe->seqnum, qe->command, true, NULL);
     }

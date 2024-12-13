@@ -800,6 +800,8 @@ void* dommeIndexerStart(void *arg)
 
     mdf_destroy(&config);
 
+    if (mdf_get_bool_value(g_runtime, "autoplay", false)) me->act = ACT_PLAY;
+
     /* me->plans 已是最新的索引文件，并都已吐出至music.db，poll 和 ionotify 监控目录变化 */
     mtc_mt_dbg("plans DONE. monitor file system...");
 
