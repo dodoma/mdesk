@@ -1,0 +1,7 @@
+[
+  {
+    "name": "默认媒体库",
+    "path": "default/",
+    "default": true
+  }
+]

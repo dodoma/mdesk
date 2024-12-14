@@ -11,8 +11,8 @@
 exec 1>/home/pi/mdesk/log/switchAP.log 2>&1
 
 CUR_TIME=`date +'%Y-%m-%d %H:%M:%S'`
-MOCSERVER="120.76.206.21"
-#MOCSERVER="mbox.net.cn"
+#MOCSERVER="120.76.206.21"
+MOCSERVER="mbox.net.cn"
 
 echo "$CUR_TIME"
 

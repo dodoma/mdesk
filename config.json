@@ -3,7 +3,6 @@
     "libraryRoot": "/home/pi/music/",
     "mocserver": {
         "host": "avm.mbox.net.cn",
-        //"host": "120.76.206.21",
         "port": 6379
     },
     "trace": {
