@@ -7,28 +7,29 @@
 # 正常联网时，开启服务1
 # 热点模式下，开启服务2、3
 
-CUR_TIME=`date +'%Y-%m-%d %H:%M:%S'`
-#MOCSERVER="120.76.206.21"
-MOCSERVER="mbox.net.cn"
-logfile=/home/pi/mdesk/log/switchAP.log
-#logfile="/dev/stdout"
+#set -x
+exec 1>/home/pi/mdesk/log/switchAP.log 2>&1
 
-echo "$CUR_TIME" >> $logfile
+CUR_TIME=`date +'%Y-%m-%d %H:%M:%S'`
+MOCSERVER="120.76.206.21"
+#MOCSERVER="mbox.net.cn"
+
+echo "$CUR_TIME"
 
 ap_do()
 {
-    echo "网络不通，切换到热点模式" >> $logfile
+    echo "网络不通，切换到热点模式"
 
-    ifdown wlan0 >> $logfile 2>&1
+    ifdown wlan0
     sleep 1
-    ifup wlan0 -i /etc/network/interfaces.master >> $logfile 2>&1
+    ifup wlan0 -i /etc/network/interfaces.master
     sleep 1
-    systemctl start hostapd >> $logfile 2>&1
-    systemctl start dnsmasq >> $logfile 2>&1
+    systemctl start hostapd
+    systemctl start dnsmasq
 }
 
 RETRY_COUNT=0
-until ping -W 5 -nq -c3 $MOCSERVER >> $logfile 2>&1; do
+until ping -W 5 -nq -c3 $MOCSERVER; do
     ((RETRY_COUNT++))
 
     if [ $RETRY_COUNT -eq 2 ]; then
@@ -36,8 +37,8 @@ until ping -W 5 -nq -c3 $MOCSERVER >> $logfile 2>&1; do
         exit 0
     fi
 
-    echo "ping 不通，重试... $RETRY_COUNT" >> $logfile
+    echo "ping 不通，重试... $RETRY_COUNT"
     sleep 3
 done
 
-echo "网络畅通，设备在线 $RETRY_COUNT" >> $logfile
+echo "网络畅通，设备在线 $RETRY_COUNT\n"
