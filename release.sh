@@ -41,7 +41,6 @@ mkdir -p /usr/local/mdesk/pool/${PACKAGE_NAME}-${VERSION}/ && \
         -C /usr/local/mdesk/pool/${PACKAGE_NAME}-${VERSION}/
 
 mkdir -p /usr/local/mdesk/pool/${PACKAGE_NAME}-${VERSION}/log/
-mkdir -p /usr/local/mdesk/pool/${PACKAGE_NAME}-${VERSION}/music/default/
 
 echo "############"
 echo "### 同步 ###"

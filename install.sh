@@ -11,6 +11,9 @@ systemctl restart polkit
 cp tools/hostapd.conf /etc/hostapd/
 cp tools/dnsmasq.conf /etc/
 
+cp tools/interfaces /etc/network/
+cp tools/interfaces.master /etc/network/
+
 cp tools/avm.service tools/on-udisk-mount.service tools/switchAP.service /lib/systemd/system/
 systemctl daemon-reload
 systemctl enable avm.service
