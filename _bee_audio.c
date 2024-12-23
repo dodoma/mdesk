@@ -527,16 +527,22 @@ static int _iterate_callback(void *user_data, const uint8_t *frame, int frame_si
                              int free_format_bytes, size_t buf_size, uint64_t offset,
                              mp3dec_frame_info_t *info)
 {
+    static int channels = 0, hz = 0;
+
     AudioEntry *me = (AudioEntry*)user_data;
     AudioTrack *track = me->track;
 
     if (track->playing && me->act != ACT_NONE) {
         mtc_mt_dbg("%s while playing", _action_string(me->act));
         track->playing = false;
+        me->pcm_param_seted = false;
         return 1;
     }
 
-    if (!track->playing) track->playing = true;
+    if (!track->playing) {
+        me->pcm_param_seted = false;
+        track->playing = true;
+    }
 
     int rv;
 
@@ -545,17 +551,23 @@ static int _iterate_callback(void *user_data, const uint8_t *frame, int frame_si
         mtc_mt_dbg("play done");
         track->percent = 0;
         track->playing = false;
+        me->pcm_param_seted = false;
         return 1;
     }
 
     if (!me->pcm_param_seted) {
-        if ((rv = snd_pcm_set_params(me->pcm,
-                                     SND_PCM_FORMAT_S16_LE, SND_PCM_ACCESS_RW_INTERLEAVED,
-                                     info->channels, info->hz, 1, 100000)) < 0) {
-            mtc_mt_err("can't set parameter. %s", snd_strerror(rv));
-            track->percent = 0;
-            track->playing = false;
-            return 1;
+        if (info->channels != channels || info->hz != hz) {
+            mtc_mt_dbg("set pcm params %d %dHZ", info->channels, info->hz);
+            if ((rv = snd_pcm_set_params(me->pcm,
+                                         SND_PCM_FORMAT_S16_LE, SND_PCM_ACCESS_RW_INTERLEAVED,
+                                         info->channels, info->hz, 1, 100000)) < 0) {
+                mtc_mt_err("can't set parameter. %s", snd_strerror(rv));
+                track->percent = 0;
+                track->playing = false;
+                return 1;
+            }
+            channels = info->channels;
+            hz = info->hz;
         }
         me->pcm_param_seted = true;
     }
