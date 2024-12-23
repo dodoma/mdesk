@@ -8,7 +8,7 @@ static int _iterate_info(void *user_data, const uint8_t *frame, int frame_size,
 
     outinfo->channels = info->channels;
     outinfo->layer = info->layer;
-    outinfo->bps = info->bitrate_kbps;
+    if (outinfo->bps < info->bitrate_kbps) outinfo->bps = info->bitrate_kbps;
     outinfo->hz = info->hz;
     outinfo->samples += hdr_frame_samples(frame);
     //d->samples += mp3dec_decode_frame(d->mp3d, frame, frame_size, NULL, info);
