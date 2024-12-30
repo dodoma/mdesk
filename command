@@ -59,3 +59,14 @@ $ sudo systemctl enable switchAP.service
 5. mount sd卡修复cmdline.txt
 6. umount, sudo fdisk -l /dev/sdb 记下 count-1
    sudo dd if=/dev/sdb of=/home/ml/avm-0.2.0.img  count=5894142 status=progress
+
+
+#版本迭代
+1. 烧录 avmxxx.img
+2. 去掉 /dev/sdb1 cmdline.txt  init=/usr/lib/raspberrypi-sys-mods/firstboot
+3. 开发环境release
+4. sudo cp tools/resize2fs_once /etc/init.d/
+5. sudo systemctl enable resize2fs_once
+6. mount sd卡修复cmdline.txt
+7. umount, sudo fdisk -l /dev/sdb 记下 count-1
+   sudo dd if=/dev/sdb of=/home/ml/avm-0.2.0.img  count=5894142 status=progress

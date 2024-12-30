@@ -5,6 +5,13 @@
 PATH=/usr/local/bin:/usr/local/sbin:/bin:/usr/bin:/usr/sbin
 PACKAGE_NAME=avm
 
+TARGET=$1
+
+if [ -z "$TARGET" ]; then
+    echo "useage $0 192.168.8.72"
+    exit 1
+fi
+
 # major
 # 主版本号，不同主版本号的程序集不可互换。
 # 例如，这适用于对产品的大量重写，这些重写使得无法实现向后兼容性。
@@ -45,5 +52,5 @@ mkdir -p /usr/local/mdesk/pool/${PACKAGE_NAME}-${VERSION}/log/
 echo "############"
 echo "### 同步 ###"
 echo "############"
-rsync -avu /usr/local/mdesk/pool/${PACKAGE_NAME}-${VERSION}/ pi@tvz:/home/pi/mdesk/ --exclude "music/"
-rsync -avu /usr/local/mdesk/pool/${PACKAGE_NAME}-${VERSION}/music/ pi@tvz:/home/pi/music/
+rsync -avu /usr/local/mdesk/pool/${PACKAGE_NAME}-${VERSION}/ pi@$TARGET:/home/pi/mdesk/ --exclude "music/"
+rsync -avu /usr/local/mdesk/pool/${PACKAGE_NAME}-${VERSION}/music/ pi@$TARGET:/home/pi/music/

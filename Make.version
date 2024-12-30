@@ -1,6 +1,6 @@
 VERSION_MAJOR    = 0
 VERSION_MINOR    = 2
-PATCHLEVEL       = 0
+PATCHLEVEL       = 2
 
 VERSION_MAJOR_HEX=$(shell printf '%02x\n' ${VERSION_MAJOR})
 VERSION_MINOR_HEX=$(shell printf '%02x\n' ${VERSION_MINOR})
