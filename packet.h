@@ -64,6 +64,7 @@ typedef enum {
     CMD_SYNC_PULL,
     CMD_REMOVE,                 /* 删除媒体文件 */
     CMD_SYNC_STORE,             /* 整库同步，慎用 */
+    CMD_SYNC_CANCEL,            /* 取消此次所有同步 */
 } COMMAND_STORAGE;
 
 typedef enum {

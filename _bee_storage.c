@@ -608,6 +608,11 @@ bool storage_process(BeeEntry *be, QueueEntry *qe)
         }
     }
     break;
+    case CMD_SYNC_CANCEL:
+        pthread_mutex_lock(&me->lock);
+        mlist_clear(me->synclist);
+        pthread_mutex_unlock(&me->lock);
+        break;
     default:
         break;
     }
