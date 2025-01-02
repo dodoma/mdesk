@@ -7,7 +7,7 @@ APP = sucker
 SOURCES = $(wildcard *.c)
 OBJECTS = $(SOURCES:.c=.o)
 
-INCS = $(INCBASE) -I ./deps/minimp3/
+INCS = $(INCBASE) -I ./deps/minimp3/ -I ./deps/dr_libs/
 LIBS = $(LIBBASE)
 
 INCS += -I/usr/include/alsa

@@ -10,6 +10,9 @@
 #include "minimp3_ex.h"
 #include "mp3.h"
 
+#define DR_FLAC_IMPLEMENTATION
+#include "dr_flac.h"
+
 #include "_bee_hardware.c"
 #include "_bee_storage.c"
 #include "_bee_audio.c"

@@ -1,17 +1,30 @@
 static int _iterate_info(void *user_data, const uint8_t *frame, int frame_size,
-                         int free_format_bytes, size_t buf_size, uint64_t offset,
-                         mp3dec_frame_info_t *info)
+                            int free_format_bytes, size_t buf_size, uint64_t offset,
+                            mp3dec_frame_info_t *info)
 {
     if (!frame) return 1;
 
-    AudioInfo *outinfo = (AudioInfo*)user_data;
-
-    outinfo->channels = info->channels;
-    outinfo->layer = info->layer;
-    if (outinfo->bps < info->bitrate_kbps) outinfo->bps = info->bitrate_kbps;
-    outinfo->hz = info->hz;
+    mp3dec_file_info_t *outinfo = (mp3dec_file_info_t*)user_data;
     outinfo->samples += hdr_frame_samples(frame);
+    outinfo->hz = info->hz;
+
+    return 0;
+}
+
+static int _iterate_track(void *user_data, const uint8_t *frame, int frame_size,
+                          int free_format_bytes, size_t buf_size, uint64_t offset,
+                          mp3dec_frame_info_t *info)
+{
+    if (!frame) return 1;
+
+    AudioTrack *outinfo = (AudioTrack*)user_data;
+
     //d->samples += mp3dec_decode_frame(d->mp3d, frame, frame_size, NULL, info);
+    outinfo->samples += hdr_frame_samples(frame);
+    outinfo->channels = info->channels;
+    outinfo->hz = info->hz;
+
+    if (outinfo->kbps < info->bitrate_kbps) outinfo->kbps = info->bitrate_kbps;
 
     return 0;
 }

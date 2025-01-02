@@ -223,7 +223,10 @@ struct fsentity* _media_info_get(const char *path, struct fsentity *nodes, int *
             snprintf(filename, sizeof(filename), "%s%s", path, entry->d_name);
 
             mp3dec_map_info_t map_info;
-            if (mp3dec_open_file(filename, &map_info) == 0) {
+            drflac *pflac;
+            if ((pflac = drflac_open_file(filename, NULL)) != NULL) {
+                drflac_close(pflac);
+            } else if (mp3dec_open_file(filename, &map_info) == 0) {
                 if (mp3dec_detect_buf(map_info.buffer, map_info.size) != 0) {
                     mp3dec_close_file(&map_info);
                     continue;

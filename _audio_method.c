@@ -1,3 +1,13 @@
+static void _on_metac(void *data, drflac_metadata *meta)
+{
+    char *smd5 = (char*)data;
+
+    if (meta->type == DRFLAC_METADATA_BLOCK_TYPE_STREAMINFO) {
+        mstr_bin2hexstr(meta->data.streaminfo.md5, 16, smd5);
+        mstr_tolower(smd5);
+    }
+}
+
 void onUstickMount(char *name)
 {
     BeeEntry *be = beeFind(FRAME_AUDIO);
@@ -309,7 +319,7 @@ bool storeMerge(char *src, char *dest)
 int storeMediaCopy(DommeStore *plan, char *pathfrom, char *pathto, bool recursive)
 {
     char srcfile[PATH_MAX], destfile[PATH_MAX];
-    char mediaID[LEN_DOMMEID];
+    char mediaID[LEN_DOMMEID], smd5[33];
 
     if (!pathfrom || !pathto) return 0;
 
@@ -326,18 +336,24 @@ int storeMediaCopy(DommeStore *plan, char *pathfrom, char *pathto, bool recursiv
         if (entry->d_type == DT_REG) {
             snprintf(srcfile, sizeof(srcfile), "%s%s", pathfrom, entry->d_name);
 
+            memset(mediaID, 0x0, LEN_DOMMEID);
+
             mp3dec_map_info_t map_info;
-            if (mp3dec_open_file(srcfile, &map_info) == 0) {
-                if (mp3dec_detect_buf(map_info.buffer, map_info.size) != 0) {
+            drflac *pflac;
+            if ((pflac = drflac_open_file_with_metadata(srcfile, _on_metac, smd5, NULL)) != NULL) {
+                memcpy(mediaID, smd5, LEN_DOMMEID);
+                mediaID[LEN_DOMMEID-1] = '\0';
+                drflac_close(pflac);
+            } else if (mp3dec_open_file(srcfile, &map_info) == 0) {
+                if (mp3dec_detect_buf(map_info.buffer, map_info.size) == 0) {
+                    mp3_md5_get_buf(map_info.buffer, map_info.size, mediaID);
+                } else {
                     mp3dec_close_file(&map_info);
                     continue;
                 }
+
+                mp3dec_close_file(&map_info);
             } else continue;
-
-            memset(mediaID, 0x0, LEN_DOMMEID);
-            mp3_md5_get_buf(map_info.buffer, map_info.size, mediaID);
-
-            mp3dec_close_file(&map_info);
 
             if (dommeGetFile(plan, mediaID)) {
                 mtc_mt_dbg("file %s exist, skip", srcfile);

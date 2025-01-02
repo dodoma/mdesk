@@ -4,3 +4,6 @@
 [submodule "deps/minimp3"]
 	path = deps/minimp3
 	url = git@codea:minimp3
+[submodule "deps/dr_libs"]
+	path = deps/dr_libs
+	url = git@codea:dr_libs.git

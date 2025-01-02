@@ -5,6 +5,15 @@
 #include <alsa/asoundlib.h>
 
 #define LEN_ID3_STRING 128
+#define FLAC_DECODE_SAMPLE 1024
+#define FLAC_DECODE_BUFLEN 32768 /* 8 channels, 1024 samples, 4 bytes/sample */
+
+typedef enum {
+    MEDIA_UNKNOWN = 0,
+    MEDIA_WAV,
+    MEDIA_FLAC,
+    MEDIA_MP3,
+} MEDIA_TYPE;
 
 typedef enum {
     ACT_NONE = 0,
@@ -17,29 +26,33 @@ typedef enum {
     ACT_STOP,
 } PLAY_ACTION;
 
-typedef struct {
-    uint64_t samples;
-    int channels;
-    int hz;
-    int layer;
-    int bps;
-} AudioInfo;
+struct MediaMp3 {
+    mp3dec_t mp3d;
+    mp3dec_map_info_t file;     /* buffer, size */
+    mp3d_sample_t buffer[MINIMP3_MAX_SAMPLES_PER_FRAME];
+};
+
+struct MediaFlac {
+    drflac *pflac;
+    drflac_int32 *psamples;
+};
 
 typedef struct {
     char *id;                   /* 当前正在播放的曲目 */
     bool playing;
 
-    mp3dec_t mp3d;
-    mp3dec_map_info_t file;     /* buffer, size */
-    AudioInfo info;
-
+    uint64_t samples;
     uint64_t samples_eat;
-    float percent;              /* 当前播放进度，或拖拽百分比 */
-    size_t offset;
-
-    mp3d_sample_t buffer[MINIMP3_MAX_SAMPLES_PER_FRAME];
-
+    int channels;
+    int hz;
+    int kbps;
     uint32_t length;            /* track length in seconds */
+    float percent;              /* 当前播放进度，或拖拽百分比 */
+
+    MEDIA_TYPE type;
+
+    struct MediaMp3 mp3;
+    struct MediaFlac flac;
 } AudioTrack;
 
 struct watcher {
@@ -111,6 +124,16 @@ static char* _action_string(PLAY_ACTION act)
     case ACT_DRAG: return "拖动";
     case ACT_STOP: return "停止播放";
     default: return "瞎搞";
+    }
+}
+
+static char* _media_string(MEDIA_TYPE type)
+{
+    switch (type) {
+    case MEDIA_WAV: return "WAV";
+    case MEDIA_FLAC: return "FLAC";
+    case MEDIA_MP3: return "MP3";
+    default: return "未知媒体类型";
     }
 }
 
@@ -523,6 +546,50 @@ char* _next_todo(AudioEntry *me)
     }
 }
 
+static bool _flac_play(AudioEntry *me)
+{
+    AudioTrack *track = me->track;
+    struct MediaFlac *flac = &track->flac;
+
+    track->playing = false;
+
+    int rv = snd_pcm_set_params(me->pcm,
+                                SND_PCM_FORMAT_S32_LE, SND_PCM_ACCESS_RW_INTERLEAVED,
+                                track->channels, track->hz, 1, 100000);
+    if (rv < 0) {
+        mtc_mt_err("can't set parameter. %s", snd_strerror(rv));
+        return false;
+    }
+
+    track->playing = true;
+
+    int samples = 0;
+    while ((samples = drflac_read_pcm_frames_s32(flac->pflac, FLAC_DECODE_SAMPLE,
+                                                 flac->psamples)) > 0) {
+        if (me->act != ACT_NONE) {
+            mtc_mt_dbg("%s while playing", _action_string(me->act));
+            track->playing = false;
+            return false;
+        }
+
+        rv = snd_pcm_writei(me->pcm, flac->psamples, samples);
+        if (rv == -EPIPE) {
+            mtc_mt_warn("XRUN");
+            snd_pcm_prepare(me->pcm);
+        }
+
+        track->samples_eat += rv;
+        track->percent = (float)track->samples_eat / track->samples;
+    }
+
+    /* 播放正常完成 */
+    track->percent = 0;
+    track->playing = false;
+    me->pcm_param_seted = false;
+
+    return true;
+}
+
 static int _iterate_callback(void *user_data, const uint8_t *frame, int frame_size,
                              int free_format_bytes, size_t buf_size, uint64_t offset,
                              mp3dec_frame_info_t *info)
@@ -531,6 +598,7 @@ static int _iterate_callback(void *user_data, const uint8_t *frame, int frame_si
 
     AudioEntry *me = (AudioEntry*)user_data;
     AudioTrack *track = me->track;
+    struct MediaMp3 *mp3 = &track->mp3;
 
     if (track->playing && me->act != ACT_NONE) {
         mtc_mt_dbg("%s while playing", _action_string(me->act));
@@ -572,20 +640,63 @@ static int _iterate_callback(void *user_data, const uint8_t *frame, int frame_si
         me->pcm_param_seted = true;
     }
 
-    memset(track->buffer, 0x0, sizeof(track->buffer));
-    int samples = mp3dec_decode_frame(&track->mp3d, frame, frame_size, track->buffer, info);
+    memset(mp3->buffer, 0x0, sizeof(mp3->buffer));
+    int samples = mp3dec_decode_frame(&mp3->mp3d, frame, frame_size, mp3->buffer, info);
     if (samples > 0) {
-        rv = snd_pcm_writei(me->pcm, track->buffer, samples);
+        rv = snd_pcm_writei(me->pcm, mp3->buffer, samples);
         if (rv == -EPIPE) {
             mtc_mt_warn("XRUN");
             snd_pcm_prepare(me->pcm);
         }
 
         track->samples_eat += rv;
-        track->percent = (float)track->samples_eat / track->info.samples;
+        track->percent = (float)track->samples_eat / track->samples;
     } else mtc_mt_warn("decode frame failure");
 
     return 0;
+}
+
+static MEDIA_TYPE _media_open(const char *filename, AudioTrack *track)
+{
+    if (!filename || !track) return MEDIA_UNKNOWN;
+
+    struct MediaMp3 *mp3 = &track->mp3;
+    struct MediaFlac *flac = &track->flac;
+
+    mp3dec_init(&mp3->mp3d);
+    if (mp3->file.buffer != 0 && mp3->file.size != 0) {
+        mp3dec_close_file(&mp3->file);
+        mp3->file.buffer = NULL;
+        mp3->file.size = 0;
+    }
+
+    if (flac->pflac) {
+        drflac_close(flac->pflac);
+        flac->pflac = NULL;
+    }
+
+    if ((flac->pflac = drflac_open_file(filename, NULL)) != NULL) {
+        uint8_t bps = flac->pflac->bitsPerSample;
+        track->samples = flac->pflac->totalPCMFrameCount;
+        track->channels = flac->pflac->channels;
+        track->hz = flac->pflac->sampleRate;
+        track->kbps = bps * track->channels * track->hz / 1000;
+        track->length = (uint32_t)track->samples / track->hz + 1;
+
+        return MEDIA_FLAC;
+    } else if (mp3dec_open_file(filename, &mp3->file) == 0) {
+        if (mp3dec_detect_buf(mp3->file.buffer, mp3->file.size) == 0) {
+            if (mp3dec_iterate_buf(mp3->file.buffer, mp3->file.size, _iterate_track, track) == 0) {
+                track->length = (uint32_t)track->samples / track->hz + 1;
+
+                return MEDIA_MP3;
+            }
+        }
+
+        mp3dec_close_file(&mp3->file);
+    }
+
+    return MEDIA_UNKNOWN;
 }
 
 static bool _play_raw(AudioEntry *me, char *filename, DommeFile *mfile)
@@ -593,44 +704,31 @@ static bool _play_raw(AudioEntry *me, char *filename, DommeFile *mfile)
     if (!me || !me->pcm || !filename || !me->track) return false;
 
     AudioTrack *track = me->track;
-
-    mp3dec_close_file(&track->file);
-    mp3dec_init(&track->mp3d);
-    memset(&track->info, 0x0, sizeof(AudioInfo));
-    track->length = 0;
     track->playing = false;
 
-    if (me->act != ACT_DRAG && me->act != ACT_RESUME) track->percent = 0;
+    track->samples = 0;
+    track->channels = 0;
+    track->hz = 0;
+    track->kbps = 0;
+    track->length = 0;
+
+    if (me->act != ACT_DRAG && me->act != ACT_RESUME) {
+        track->percent = 0;
+        track->samples_eat = 0;
+    } else track->samples_eat = track->samples * track->percent;
+
+    track->type = _media_open(filename, track);
+    if (track->type == MEDIA_UNKNOWN) {
+        mtc_mt_err("can't open media file %s", filename);
+        return false;
+    }
 
     mtc_mt_dbg("playing %s %s %.2f", mfile->id, filename, track->percent);
 
-    int ret = mp3dec_open_file(filename, &track->file);
-    if (ret != 0) {
-        mtc_mt_err("open %s failure", filename);
-        return false;
-    }
-
-    ret = mp3dec_iterate_buf(track->file.buffer, track->file.size, _iterate_info, &track->info);
-    if (ret != 0) {
-        mtc_mt_err("load info %s failure", filename);
-        mp3dec_close_file(&track->file);
-        return false;
-    }
-
-    track->length = (uint32_t)track->info.samples / track->info.hz + 1;
-
-    if (track->percent != 0) {
-        track->offset = track->file.size * track->percent;
-        track->samples_eat = track->info.samples * track->percent;
-    } else {
-        track->offset = 0;
-        track->samples_eat = 0;
-    }
-
-    mtc_mt_dbg("%s layer %d, %ju samples, %d HZ, %d kbps, %u seconds",
-               track->info.channels == 2 ? "Stero" : "Mono",
-               track->info.layer, track->info.samples, track->info.hz,
-               track->info.bps, track->length);
+    /* 广播媒体信息 */
+    mtc_mt_dbg("%s %s, %ju samples, %d HZ, %d kbps, %u seconds",
+               _media_string(track->type), track->channels == 2 ? "Stero" : "Mono",
+               track->samples, track->hz, track->kbps, track->length);
 
     Channel *slot = channelFind(me->base.channels, "PLAYING_INFO", false);
     if (!channelEmpty(slot) && mfile) {
@@ -645,9 +743,9 @@ static bool _play_raw(AudioEntry *me, char *filename, DommeFile *mfile)
         mdf_set_value(dnode, "artist", mfile->artist->name);
         mdf_set_value(dnode, "album", mfile->disk->title);
 
-        mdf_set_value(dnode, "file_type", "MP3");
-        mdf_set_valuef(dnode, "bps=%dkbps", track->info.bps);
-        mdf_set_valuef(dnode, "rate=%.1fkhz", (float)track->info.hz / 1000);
+        mdf_set_value(dnode, "file_type", _media_string(track->type));
+        mdf_set_valuef(dnode, "bps=%dkbps", track->kbps);
+        mdf_set_valuef(dnode, "rate=%.1fkhz", (float)track->hz / 1000);
         mdf_set_double_value(dnode, "volume", _get_normalized_volume(me->mixer));
         mdf_set_bool_value(dnode, "shuffle", me->shuffle);
 
@@ -660,16 +758,48 @@ static bool _play_raw(AudioEntry *me, char *filename, DommeFile *mfile)
         mdf_destroy(&dnode);
     }
 
+    /* 播放 */
     me->act = ACT_NONE;
 
-    if (mp3dec_iterate_buf(track->file.buffer + track->offset,
-                           track->file.size - track->offset, _iterate_callback, me) != 0) {
-        mtc_mt_err("play buffer error failure");
-        mp3dec_close_file(&track->file);
-        return false;
+    switch (track->type) {
+    case MEDIA_WAV:
+        break;
+    case MEDIA_FLAC:
+    {
+        if (track->percent != 0) {
+            drflac_uint64 index = track->samples * track->percent;
+            drflac_seek_to_pcm_frame(track->flac.pflac, index);
+        }
+
+        if (!_flac_play(me)) {
+            mtc_mt_err("play buffer error");
+
+            drflac_close(track->flac.pflac);
+            return false;
+        }
+
+        drflac_close(track->flac.pflac);
+    }
+    break;
+    case MEDIA_MP3:
+    {
+        struct MediaMp3 *mp3 = &track->mp3;
+        size_t offset = track->percent == 0.0 ? 0 : mp3->file.size * track->percent;
+
+        if (mp3dec_iterate_buf(mp3->file.buffer + offset,
+                               mp3->file.size - offset, _iterate_callback, me) != 0) {
+            mtc_mt_err("play buffer error failure");
+            mp3dec_close_file(&mp3->file);
+            return false;
+        }
+
+        mp3dec_close_file(&mp3->file);
+    }
+    break;
+    default:
+        break;
     }
 
-    mp3dec_close_file(&track->file);
     return true;
 }
 
@@ -891,8 +1021,8 @@ bool audio_process(BeeEntry *be, QueueEntry *qe)
                 mdf_set_value(qe->nodeout, "album", mfile->disk->title);
 
                 mdf_set_value(qe->nodeout, "file_type", "MP3");
-                mdf_set_valuef(qe->nodeout, "bps=%dkbps", track->info.bps);
-                mdf_set_valuef(qe->nodeout, "rate=%.1fkhz", (float)track->info.hz / 1000);
+                mdf_set_valuef(qe->nodeout, "bps=%dkbps", track->kbps);
+                mdf_set_valuef(qe->nodeout, "rate=%.1fkhz", (float)track->hz / 1000);
                 mdf_set_double_value(qe->nodeout, "volume", _get_normalized_volume(me->mixer));
                 mdf_set_bool_value(qe->nodeout, "shuffle", me->shuffle);
             }
@@ -980,6 +1110,7 @@ void audio_stop(BeeEntry *be)
     pthread_mutex_destroy(&me->lock);
     pthread_mutex_destroy(&me->index_lock);
 
+    mos_free(me->track->flac.psamples);
     mos_free(me->track);
     mlist_destroy(&me->plans);
     mlist_destroy(&me->playlist);
@@ -1011,15 +1142,22 @@ BeeEntry* _start_audio()
     mlist_init(&me->playlist, free);
 
     me->track = mos_calloc(1, sizeof(AudioTrack));
+    memset(me->track, 0x0, sizeof(AudioTrack));
     me->track->id = NULL;
     me->track->playing = false;
-    mp3dec_init(&me->track->mp3d);
-    memset(&me->track->file, 0x0, sizeof(mp3dec_map_info_t));
-    memset(&me->track->info, 0x0, sizeof(AudioInfo));
+
+    me->track->samples = 0;
     me->track->samples_eat = 0;
-    me->track->percent = 0;
-    me->track->offset = 0;
+    me->track->channels = 0;
+    me->track->hz = 0;
+    me->track->kbps = 0;
     me->track->length = 0;
+    me->track->percent = 0;
+    me->track->type = MEDIA_UNKNOWN;
+
+    mp3dec_init(&me->track->mp3.mp3d);
+    me->track->flac.pflac = NULL;
+    me->track->flac.psamples = malloc(FLAC_DECODE_BUFLEN);
 
     int rv = snd_pcm_open(&me->pcm, "default", SND_PCM_STREAM_PLAYBACK, 0);
     if (rv < 0) {
