@@ -1,13 +1,3 @@
-static void _on_metac(void *data, drflac_metadata *meta)
-{
-    char *smd5 = (char*)data;
-
-    if (meta->type == DRFLAC_METADATA_BLOCK_TYPE_STREAMINFO) {
-        mstr_bin2hexstr(meta->data.streaminfo.md5, 16, smd5);
-        mstr_tolower(smd5);
-    }
-}
-
 void onUstickMount(char *name)
 {
     BeeEntry *be = beeFind(FRAME_AUDIO);
@@ -319,7 +309,7 @@ bool storeMerge(char *src, char *dest)
 int storeMediaCopy(DommeStore *plan, char *pathfrom, char *pathto, bool recursive)
 {
     char srcfile[PATH_MAX], destfile[PATH_MAX];
-    char mediaID[LEN_DOMMEID], smd5[33];
+    char mediaID[LEN_DOMMEID];
 
     if (!pathfrom || !pathto) return 0;
 
@@ -338,21 +328,12 @@ int storeMediaCopy(DommeStore *plan, char *pathfrom, char *pathto, bool recursiv
 
             memset(mediaID, 0x0, LEN_DOMMEID);
 
-            mp3dec_map_info_t map_info;
-            drflac *pflac;
-            if ((pflac = drflac_open_file_with_metadata(srcfile, _on_metac, smd5, NULL)) != NULL) {
-                memcpy(mediaID, smd5, LEN_DOMMEID);
+            MediaNode *mnode = mediaOpen(srcfile);
+            if (mnode) {
+                memcpy(mediaID, mnode->md5, LEN_DOMMEID);
                 mediaID[LEN_DOMMEID-1] = '\0';
-                drflac_close(pflac);
-            } else if (mp3dec_open_file(srcfile, &map_info) == 0) {
-                if (mp3dec_detect_buf(map_info.buffer, map_info.size) == 0) {
-                    mp3_md5_get_buf(map_info.buffer, map_info.size, mediaID);
-                } else {
-                    mp3dec_close_file(&map_info);
-                    continue;
-                }
 
-                mp3dec_close_file(&map_info);
+                mnode->driver->close(mnode);
             } else continue;
 
             if (dommeGetFile(plan, mediaID)) {

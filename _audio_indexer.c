@@ -3,53 +3,6 @@ struct indexer_arg {
     MLIST *files;
 };
 
-struct meta_arg {
-    char *smd5;
-    char *title;
-    char *artist;
-    char *album;
-    char *year;
-    char *track;
-};
-
-static void _on_meta(void *data, drflac_metadata *meta)
-{
-    struct meta_arg *arg = (struct meta_arg*)data;
-
-    if (meta->type == DRFLAC_METADATA_BLOCK_TYPE_STREAMINFO) {
-        mstr_bin2hexstr(meta->data.streaminfo.md5, 16, arg->smd5);
-        mstr_tolower(arg->smd5);
-    } else if (meta->type == DRFLAC_METADATA_BLOCK_TYPE_VORBIS_COMMENT) {
-        const char *comment = NULL;
-        drflac_uint32 comment_len = 0;
-        drflac_vorbis_comment_iterator piter;
-        drflac_init_vorbis_comment_iterator(&piter,
-                                            meta->data.vorbis_comment.commentCount,
-                                            meta->data.vorbis_comment.pComments);
-
-        while ((comment = drflac_next_vorbis_comment(&piter, &comment_len)) != NULL) {
-            if (comment_len > LEN_ID3_STRING) comment_len = LEN_ID3_STRING;
-
-            if (!strncasecmp(comment, "TITLE", 5)) {
-                comment += 6;
-                memcpy(arg->title, comment, comment_len - 6);
-            } else if (!strncasecmp(comment, "ARTIST", 6)) {
-                comment += 7;
-                memcpy(arg->artist, comment, comment_len - 7);
-            } else if (!strncasecmp(comment, "ALBUM", 5)) {
-                comment += 6;
-                memcpy(arg->album, comment, comment_len - 6);
-            } else if (!strncasecmp(comment, "TRACKNUMBER", 11)) {
-                comment += 12;
-                memcpy(arg->track, comment, comment_len - 12);
-            } else if (!strncasecmp(comment, "YEAR", 4)) {
-                comment += 5;
-                memcpy(arg->year, comment, comment_len - 5);
-            }
-        }
-    }
-}
-
 static int _scan_directory(const struct dirent *ent)
 {
     if ((ent->d_name[0] == '.' && ent->d_name[1] == 0) ||
@@ -303,6 +256,9 @@ static void* _index_music(void *arg)
     DommeAlbum *disk;
     DommeArtist *artist;
 
+    MediaNode *mnode;
+    ArtInfo *ainfo;
+
     int indexcount = 0;
     static int threadsn = 0;
     char threadname[24];
@@ -316,73 +272,33 @@ static void* _index_music(void *arg)
     filename = mlist_popx(arga->files);
     pthread_mutex_unlock(&m_indexer_lock);
 
-    char smd5[33], stitle[LEN_ID3_STRING], sartist[LEN_ID3_STRING], salbum[LEN_ID3_STRING];
-    char syear[LEN_ID3_STRING], strack[LEN_ID3_STRING];
-    drflac *pflac = NULL;
-    struct meta_arg metaarg = {
-        .smd5 = smd5, .title = stitle, .artist = sartist, .album = salbum,
-        .year = syear, .track = strack
-    };
-    mp3dec_map_info_t map_info;
-    mp3dec_file_info_t fileinfo;
     while (filename) {
         mfile = NULL;
-        pflac = NULL;
-        memset(smd5,    0x0, sizeof(smd5));
-        memset(stitle,  0x0, sizeof(stitle));
-        memset(sartist, 0x0, sizeof(sartist));
-        memset(salbum,  0x0, sizeof(salbum));
-        memset(syear,   0x0, sizeof(syear));
-        memset(strack,  0x0, sizeof(strack));
-        memset(&fileinfo, 0x0, sizeof(mp3dec_file_info_t));
 
         if (!_extract_filename(filename, plan, &fpath, &fname)) {
             mtc_mt_dbg("extract %s failure", filename);
             goto nextone;
         }
 
-        if ((pflac = drflac_open_file_with_metadata(filename, _on_meta, &metaarg, NULL)) != NULL) {
-            //mhash_file_md5_s(filename, md5sum);
-            mfile = mos_calloc(1, sizeof(DommeFile));
-            memcpy(mfile->id, smd5, LEN_DOMMEID);
-            mfile->id[LEN_DOMMEID-1] = '\0';
-            mfile->length = (uint32_t)pflac->totalPCMFrameCount / pflac->sampleRate + 1;
+        mnode = mediaOpen(filename);
+        if (mnode != NULL) {
+            ainfo = mnode->driver->art_info_get(mnode);
+            if (ainfo) {
+                mfile = mos_calloc(1, sizeof(DommeFile));
 
-            mfile->dir = fpath;
-            mfile->name = strdup(fname);
-            mfile->title = strdup(stitle);
-            mfile->sn = atoi(strack);
-            mfile->touched = false;
+                memcpy(mfile->id, mnode->md5, LEN_DOMMEID);
+                mfile->id[LEN_DOMMEID-1] = '\0';
+                mfile->length = ainfo->length;
+                mfile->dir = fpath;
+                mfile->name = strdup(fname);
+                mfile->title = strdup(ainfo->title);
+                mfile->sn = atoi(ainfo->track);
+                mfile->touched = false;
 
-            mtc_mt_dbg("%s %s %s %s %s %s", filename, mfile->id, sartist, stitle, salbum, strack);
-            //mtc_mt_dbg("%s %s", filename, mfile->id);
-
-            drflac_close(pflac);
-            pflac = NULL;
-        } else if (mp3dec_open_file(filename, &map_info) == 0) {
-            if (mp3dec_detect_buf(map_info.buffer, map_info.size) == 0) {
-                /* title, sn, artist, album */
-                if (mp3_id3_get_buf(map_info.buffer, map_info.size,
-                                    stitle, sartist, salbum, syear, strack)) {
-                    mfile = mos_calloc(1, sizeof(DommeFile));
-                    mp3_md5_get_buf(map_info.buffer, map_info.size, mfile->id);
-                    mp3dec_iterate_buf(map_info.buffer, map_info.size, _iterate_info, &fileinfo);
-                    mfile->dir = fpath;
-                    mfile->name = strdup(fname);
-                    mfile->title = strdup(stitle);
-                    mfile->sn = atoi(strack);
-                    mfile->length = (uint32_t)fileinfo.samples / fileinfo.hz + 1;
-                    mfile->touched = false;
-
-                    //mtc_mt_noise("%s %s %s %s %s", mfile->id, sartist, stitle, salbum, strack);
-                    mtc_mt_dbg("%s %s", filename, mfile->id);
-                } else {
-                    mtc_mt_dbg("%s not valid mp3 file, REMOVE", filename);
-                    remove(filename);
-                }
-            } else mtc_mt_warn("%s not music", filename);
-
-            mp3dec_close_file(&map_info);
+                mtc_mt_dbg("%s %s: %s %s %s %s", filename, mfile->id,
+                           ainfo->artist, ainfo->title, ainfo->album, ainfo->track);
+                //mtc_mt_dbg("%s %s", filename, mfile->id);
+            }
         }
 
     nextone:
@@ -395,15 +311,15 @@ static void* _index_music(void *arg)
                 remove(filename);
                 dommeFileFree(mfile->id, mfile);
             } else {
-                artist = artistFind(plan->artists, sartist);
+                artist = artistFind(plan->artists, ainfo->artist);
                 if (!artist) {
-                    artist = artistCreate(sartist);
+                    artist = artistCreate(ainfo->artist);
                     mlist_append(plan->artists, artist);
                 }
-                disk = albumFind(artist->albums, salbum);
+                disk = albumFind(artist->albums, ainfo->album);
                 if (!disk) {
-                    disk = albumCreate(salbum);
-                    disk->year = strdup(syear);
+                    disk = albumCreate(ainfo->album);
+                    disk->year = strdup(ainfo->year);
                     mlist_append(artist->albums, disk);
                     plan->count_album++;
                 }
@@ -420,6 +336,7 @@ static void* _index_music(void *arg)
                 indexcount++;
             }
         }
+        if (mnode) mnode->driver->close(mnode);
         filename = mlist_popx(arga->files);
         pthread_mutex_unlock(&m_indexer_lock);
     }
@@ -590,6 +507,9 @@ struct watcher* indexerWatch(int efd, struct watcher *seeds, AudioEntry *me)
     DommeArtist *artist;
     DommeStore *plan;
 
+    MediaNode *mnode;
+    ArtInfo *ainfo;
+
     /* Loop while events can be read from inotify file descriptor. */
     for (;;) {
         /* Read some events. */
@@ -707,75 +627,41 @@ struct watcher* indexerWatch(int efd, struct watcher *seeds, AudioEntry *me)
 
                     mtc_mt_dbg("%s%s CREATE file %s", plan->basedir, arg->path, event->name);
 
-                    drflac *pflac = NULL;
                     mfile = NULL;
-                    char smd5[33];
-                    char stitle[LEN_ID3_STRING], sartist[LEN_ID3_STRING], salbum[LEN_ID3_STRING];
-                    char syear[LEN_ID3_STRING], strack[LEN_ID3_STRING];
-                    struct meta_arg metaarg = {
-                        .smd5 = smd5, .title = stitle, .artist = sartist, .album = salbum,
-                        .year = syear, .track = strack
-                    };
-                    mp3dec_map_info_t map_info;
-                    mp3dec_file_info_t fileinfo;
-                    memset(smd5,    0x0, sizeof(smd5));
-                    memset(stitle,  0x0, sizeof(stitle));
-                    memset(sartist, 0x0, sizeof(sartist));
-                    memset(salbum,  0x0, sizeof(salbum));
-                    memset(syear,   0x0, sizeof(syear));
-                    memset(strack,  0x0, sizeof(strack));
-                    memset(&fileinfo, 0x0, sizeof(mp3dec_file_info_t));
 
                     if (!_extract_filename(filename, plan, &fpath, &fname)) {
                         mtc_mt_warn("extract %s failure", filename);
                         continue;
                     }
 
-                    if ((pflac = drflac_open_file_with_metadata(filename, _on_meta,
-                                                                &metaarg, NULL)) != NULL) {
-                        mfile = mos_calloc(1, sizeof(DommeFile));
-                        memcpy(mfile->id, smd5, LEN_DOMMEID);
-                        mfile->id[LEN_DOMMEID-1] = '\0';
-                        mfile->length = (uint32_t)pflac->totalPCMFrameCount / pflac->sampleRate + 1;
+                    mnode = mediaOpen(filename);
+                    if (mnode != NULL) {
+                        ainfo = mnode->driver->art_info_get(mnode);
+                        if (ainfo) {
+                            mfile = mos_calloc(1, sizeof(DommeFile));
 
-                        mfile->dir = fpath;
-                        mfile->name = strdup(event->name);
-                        mfile->title = strdup(stitle);
-                        mfile->sn = atoi(strack);
-                        mfile->touched = false;
+                            memcpy(mfile->id, mnode->md5, LEN_DOMMEID);
+                            mfile->id[LEN_DOMMEID-1] = '\0';
+                            mfile->length = ainfo->length;
+                            mfile->dir = fpath;
+                            mfile->name = strdup(event->name);
+                            mfile->title = strdup(ainfo->title);
+                            mfile->sn = atoi(ainfo->track);
+                            mfile->touched = false;
+                        }
 
-                        drflac_close(pflac);
-                    } else if (mp3dec_open_file(filename, &map_info) == 0) {
-                        if (mp3dec_detect_buf(map_info.buffer, map_info.size) == 0) {
-                            if (mp3_id3_get_buf(map_info.buffer, map_info.size,
-                                                stitle, sartist, salbum, syear, strack)) {
-                                mfile = mos_calloc(1, sizeof(DommeFile));
-                                mp3_md5_get_buf(map_info.buffer, map_info.size, mfile->id);
-                                mp3dec_iterate_buf(map_info.buffer, map_info.size,
-                                                   _iterate_info, &fileinfo);
-                                mfile->dir = fpath;
-                                mfile->name = strdup(event->name);
-                                mfile->title = strdup(stitle);
-                                mfile->sn = atoi(strack);
-                                mfile->length = (uint32_t)fileinfo.samples / fileinfo.hz + 1;
-                                mfile->touched = false;
-
-                            } else mtc_mt_warn("%s not valid mp3 file", filename);
-                        } else mtc_mt_warn("%s not music", filename);
-
-                        mp3dec_close_file(&map_info);
                     }
 
                     if (mfile) {
-                        artist = artistFind(plan->artists, sartist);
+                        artist = artistFind(plan->artists, ainfo->artist);
                         if (!artist) {
-                            artist = artistCreate(sartist);
+                            artist = artistCreate(ainfo->artist);
                             mlist_append(plan->artists, artist);
                         }
-                        disk = albumFind(artist->albums, salbum);
+                        disk = albumFind(artist->albums, ainfo->album);
                         if (!disk) {
-                            disk = albumCreate(salbum);
-                            disk->year = strdup(syear);
+                            disk = albumCreate(ainfo->album);
+                            disk->year = strdup(ainfo->year);
                             mlist_append(artist->albums, disk);
                             plan->count_album++;
                         }
@@ -796,6 +682,8 @@ struct watcher* indexerWatch(int efd, struct watcher *seeds, AudioEntry *me)
 
                         arg->on_dirty = g_ctime;
                     }
+
+                    if (mnode) mnode->driver->close(mnode);
                 } else if (event->mask & IN_DELETE) {
                     mtc_mt_dbg("%s%s DELETE file %s", plan->basedir, arg->path, event->name);
 

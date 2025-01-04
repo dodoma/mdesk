@@ -138,13 +138,13 @@ static bool _info_get_id3v1(const uint8_t *buf, size_t len,
         if (!memcmp(pos, "TAG", 3)) {
             pos += 3;
 
-            doconv(pos, 30, "GB18030", title, LEN_ID3_STRING);
+            doconv(pos, 30, "GB18030", title, LEN_MEDIA_TOKEN);
             pos += 30;
 
-            doconv(pos, 30, "GB18030", artist, LEN_ID3_STRING);
+            doconv(pos, 30, "GB18030", artist, LEN_MEDIA_TOKEN);
             pos += 30;
 
-            doconv(pos, 30, "GB18030", album, LEN_ID3_STRING);
+            doconv(pos, 30, "GB18030", album, LEN_MEDIA_TOKEN);
             pos += 30;
 
             strncpy(year, pos, 4);
@@ -162,14 +162,14 @@ static bool _info_get_id3v2(const uint8_t *buf, size_t len,
     if (len >= 10 && !memcmp(buf, "ID3", 3) && buf[3] <= 0x04 &&
         !((buf[5] & 15) || (buf[6] & 0x80) || (buf[7] & 0x80) || (buf[8] & 0x80) || (buf[9] & 0x80))) {
 
-        if (_read_id3v2(buf, len, ID3_TITLE, title, LEN_ID3_STRING) == 0) return false;
+        if (_read_id3v2(buf, len, ID3_TITLE, title, LEN_MEDIA_TOKEN) == 0) return false;
 
-        if (_read_id3v2(buf, len, ID3_ARTIST2, artist, LEN_ID3_STRING) == 0)
-            if (_read_id3v2(buf, len, ID3_ARTIST, artist, LEN_ID3_STRING) == 0) return false;
+        if (_read_id3v2(buf, len, ID3_ARTIST2, artist, LEN_MEDIA_TOKEN) == 0)
+            if (_read_id3v2(buf, len, ID3_ARTIST, artist, LEN_MEDIA_TOKEN) == 0) return false;
 
-        _read_id3v2(buf, len, ID3_ALBUM, album,  LEN_ID3_STRING);
-        _read_id3v2(buf, len, ID3_YEAR, year, LEN_ID3_STRING);
-        _read_id3v2(buf, len, ID3_TRACK_NUM, track, LEN_ID3_STRING);
+        _read_id3v2(buf, len, ID3_ALBUM, album,  LEN_MEDIA_TOKEN);
+        _read_id3v2(buf, len, ID3_YEAR, year, LEN_MEDIA_TOKEN);
+        _read_id3v2(buf, len, ID3_TRACK_NUM, track, LEN_MEDIA_TOKEN);
 
         return true;
     }
@@ -243,6 +243,21 @@ bool mp3_md5_get_buf(const uint8_t *buffer, size_t buf_size, char id[LEN_DOMMEID
     /* TODO 只取16个字节中的前几个，出现了冲突再做处理 */
     mstr_bin2hexstr(sum, (int)(LEN_DOMMEID-1)/2, id);
     mstr_tolower(id);
+
+    return true;
+}
+
+bool mp3_md5_buf(const uint8_t *buffer, size_t buf_size, char md5[33])
+{
+    memset(md5, 0x0, 33);
+
+    /* md5 string */
+    mp3dec_skip_id3(&buffer, &buf_size);
+    unsigned char sum[16];
+    mhash_md5_buf((unsigned char*)buffer, buf_size, sum);
+
+    mstr_bin2hexstr(sum, 16, md5);
+    mstr_tolower(md5);
 
     return true;
 }

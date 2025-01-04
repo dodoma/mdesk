@@ -26,11 +26,6 @@ struct reqitem {
     NetBinaryNode *client;
 };
 
-struct meta_argb {
-    uint8_t *imagebuf;
-    size_t imagesize;
-};
-
 static void _client_destroy(void *p)
 {
     if (!p) return;
@@ -41,18 +36,6 @@ static void _client_destroy(void *p)
 
     mos_free(client->buf);
     mos_free(client);
-}
-
-static void _on_metab(void *data, drflac_metadata *meta)
-{
-    struct meta_argb *arg = (struct meta_argb*)data;
-
-    if (meta->type == DRFLAC_METADATA_BLOCK_TYPE_PICTURE &&
-        meta->data.picture.pictureDataSize > 0) {
-        arg->imagebuf = malloc(meta->data.picture.pictureDataSize);
-        arg->imagesize = meta->data.picture.pictureDataSize;
-        memcpy(arg->imagebuf, meta->data.picture.pPictureData, arg->imagesize);
-    }
 }
 
 /* 为避免同步通知，每次从磁盘上读取媒体库配置 */
@@ -238,23 +221,19 @@ bool _push_track_cover(StorageEntry *me, struct reqitem *item)
 
     DommeFile *mfile = dommeGetFile(me->plan, item->id);
     if (mfile) {
-        uint8_t *imgbuf;
-        char *mime;
-        size_t coversize;
         snprintf(filename, sizeof(filename), "%s%s%s%s",
                  me->libroot, me->storepath, mfile->dir, mfile->name);
 
-        struct meta_argb metaarg = {.imagebuf = NULL, .imagesize = 0};
-        drflac *pflac = drflac_open_file_with_metadata(filename, _on_metab, &metaarg, NULL);
-        mp3dec_map_info_t *mapinfo = NULL;
-        if (pflac != NULL) {
-            drflac_close(pflac);
-        } else {
-            mapinfo = mp3_cover_open(filename, &mime, &imgbuf, &coversize);
-            if (!mapinfo) {
-                snprintf(filename, sizeof(filename), "%s.avm/track_cover.jpg", me->libroot);
-                return _push_puppet(item->client, filename, nameWithPath);
-            }
+        uint8_t *imgbuf = NULL;
+        size_t coversize = 0;
+        MediaNode *mnode = mediaOpen(filename);
+        if (mnode) imgbuf = mnode->driver->cover_get(mnode, &coversize);
+
+        if (!imgbuf) {
+            if (mnode) mnode->driver->close(mnode);
+
+            snprintf(filename, sizeof(filename), "%s.avm/track_cover.jpg", me->libroot);
+            return _push_puppet(item->client, filename, nameWithPath);
         }
 
         /* CMD_SYNC */
@@ -266,13 +245,9 @@ bool _push_track_cover(StorageEntry *me, struct reqitem *item)
         SSEND(client->base.fd, bufsend, sendlen);
 
         /* file contents */
-        if (mapinfo) {
-            SSEND(client->base.fd, imgbuf, coversize);
-            mp3_cover_close(mapinfo);
-        } else if (metaarg.imagebuf != NULL) {
-            SSEND(client->base.fd, metaarg.imagebuf, metaarg.imagesize);
-            free(metaarg.imagebuf);
-        }
+        SSEND(client->base.fd, imgbuf, coversize);
+
+        mnode->driver->close(mnode);
 
         return true;
     } else mtc_mt_warn("%s not exist", item->id);
@@ -296,14 +271,18 @@ bool _push_artist_cover(StorageEntry *me, struct reqitem *item)
     if (artist) {
         MLIST_ITERATE(artist->albums, disk) {
             MLIST_ITERATEB(disk->tracks, mfile) {
-                uint8_t *imgbuf;
-                char *mime;
-                size_t coversize;
                 snprintf(filename, sizeof(filename), "%s%s%s%s",
                          me->libroot, me->storepath, mfile->dir, mfile->name);
 
-                mp3dec_map_info_t *mapinfo = mp3_cover_open(filename, &mime, &imgbuf, &coversize);
-                if (!mapinfo) continue;
+                uint8_t *imgbuf = NULL;
+                size_t coversize = 0;
+                MediaNode *mnode = mediaOpen(filename);
+                if (mnode) imgbuf = mnode->driver->cover_get(mnode, &coversize);
+
+                if (!imgbuf) {
+                    if (mnode) mnode->driver->close(mnode);
+                    continue;
+                }
 
                 /* CMD_SYNC */
                 uint8_t bufsend[LEN_PACKET_NORMAL];
@@ -316,7 +295,7 @@ bool _push_artist_cover(StorageEntry *me, struct reqitem *item)
                 /* file contents */
                 SSEND(client->base.fd, imgbuf, coversize);
 
-                mp3_cover_close(mapinfo);
+                mnode->driver->close(mnode);
 
                 return true;
             }
@@ -345,14 +324,18 @@ bool _push_album_cover(StorageEntry *me, struct reqitem *item)
         DommeAlbum *disk = albumFind(artist->albums, item->album);
         if (disk) {
             MLIST_ITERATE(disk->tracks, mfile) {
-                uint8_t *imgbuf;
-                char *mime;
-                size_t coversize;
                 snprintf(filename, sizeof(filename), "%s%s%s%s",
                          me->libroot, me->storepath, mfile->dir, mfile->name);
 
-                mp3dec_map_info_t *mapinfo = mp3_cover_open(filename, &mime, &imgbuf, &coversize);
-                if (!mapinfo) continue;
+                uint8_t *imgbuf = NULL;
+                size_t coversize = 0;
+                MediaNode *mnode = mediaOpen(filename);
+                if (mnode) imgbuf = mnode->driver->cover_get(mnode, &coversize);
+
+                if (!imgbuf) {
+                    if (mnode) mnode->driver->close(mnode);
+                    continue;
+                }
 
                 /* CMD_SYNC */
                 uint8_t bufsend[LEN_PACKET_NORMAL];
@@ -365,7 +348,7 @@ bool _push_album_cover(StorageEntry *me, struct reqitem *item)
                 /* file contents */
                 SSEND(client->base.fd, imgbuf, coversize);
 
-                mp3_cover_close(mapinfo);
+                mnode->driver->close(mnode);
 
                 return true;
             }

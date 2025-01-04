@@ -2,115 +2,6 @@
 #include <sys/inotify.h>
 #include <dirent.h>
 #include <iconv.h>
-#include <alsa/asoundlib.h>
-
-#define LEN_ID3_STRING 128
-#define FLAC_DECODE_SAMPLE 1024
-#define FLAC_DECODE_BUFLEN 32768 /* 8 channels, 1024 samples, 4 bytes/sample */
-
-typedef enum {
-    MEDIA_UNKNOWN = 0,
-    MEDIA_WAV,
-    MEDIA_FLAC,
-    MEDIA_MP3,
-} MEDIA_TYPE;
-
-typedef enum {
-    ACT_NONE = 0,
-    ACT_PLAY,
-    ACT_PAUSE,
-    ACT_RESUME,
-    ACT_NEXT,
-    ACT_PREV,
-    ACT_DRAG,
-    ACT_STOP,
-} PLAY_ACTION;
-
-struct MediaMp3 {
-    mp3dec_t mp3d;
-    mp3dec_map_info_t file;     /* buffer, size */
-    mp3d_sample_t buffer[MINIMP3_MAX_SAMPLES_PER_FRAME];
-};
-
-struct MediaFlac {
-    drflac *pflac;
-    drflac_int32 *psamples;
-};
-
-typedef struct {
-    char *id;                   /* 当前正在播放的曲目 */
-    bool playing;
-
-    uint64_t samples;
-    uint64_t samples_eat;
-    int channels;
-    int hz;
-    int kbps;
-    uint32_t length;            /* track length in seconds */
-    float percent;              /* 当前播放进度，或拖拽百分比 */
-
-    MEDIA_TYPE type;
-
-    struct MediaMp3 mp3;
-    struct MediaFlac flac;
-} AudioTrack;
-
-struct watcher {
-    int wd;
-    time_t on_dirty;
-    DommeStore *plan;
-    char *path;
-
-    struct watcher *next;
-};
-
-/*
- * 总的来说，用户动作有
- * 1. 设置播放范围
- * 2. 设置后续动作（顺序播放、随机播放、循环模式、几首后关闭）
- * 3. 播放、暂停、上一首、下一首
- * 4. 拖动播放
- */
-typedef struct {
-    BeeEntry base;
-
-    pthread_t worker;           /* player */
-    pthread_mutex_t lock;
-    pthread_cond_t cond;
-    bool running;
-
-    pthread_t indexer;          /* indexer */
-    struct watcher *seeds;
-    int efd;
-    pthread_mutex_t index_lock;
-
-    snd_pcm_t *pcm;
-    snd_mixer_elem_t *mixer;
-    bool pcm_param_seted;
-
-    MLIST *plans;               /* 所有媒体库列表 */
-    DommeStore *plan;           /* 当前使用的媒体库 */
-
-    char *trackid;              /* 设置播放曲目 */
-    char *album;                /* 设置播放专辑 */
-    char *artist;               /* 设置播放艺术家 */
-
-    PLAY_ACTION act;
-
-    bool shuffle;
-    bool loopon;
-    int remain;
-    float dragto;
-
-    MLIST *playlist;            /* 播放列表 */
-
-    AudioTrack *track;
-} AudioEntry;
-
-#include "_mp3.c"
-#include "_audio_init.c"
-#include "_audio_indexer.c"
-#include "_audio_method.c"
 
 static char* _action_string(PLAY_ACTION act)
 {
@@ -127,15 +18,57 @@ static char* _action_string(PLAY_ACTION act)
     }
 }
 
-static char* _media_string(MEDIA_TYPE type)
+#include "_media_mp3.c"
+#include "_media_flac.c"
+
+MediaEntry *media_plugins[] = {
+    &media_mp3.base,
+    &media_flac.base,
+    NULL
+};
+
+MEDIA_TYPE mediaType(const char *filename)
 {
-    switch (type) {
-    case MEDIA_WAV: return "WAV";
-    case MEDIA_FLAC: return "FLAC";
-    case MEDIA_MP3: return "MP3";
-    default: return "未知媒体类型";
+
+    if (!filename) return MEDIA_UNKNOWN;
+
+    int index = 0;
+    while (media_plugins[index]) {
+        if (media_plugins[index]->check(filename) == true) return media_plugins[index]->type;
+
+        index++;
     }
+
+    return MEDIA_UNKNOWN;
 }
+
+MediaNode* mediaOpen(const char *filename)
+{
+    MediaNode *mnode;
+
+    size_t namelen = strlen(filename);
+
+    if (!filename) return NULL;
+
+    int index = 0;
+    while (media_plugins[index]) {
+        mnode = media_plugins[index]->open(filename);
+        if (mnode) {
+            strncpy(mnode->filename, filename, namelen > PATH_MAX ? PATH_MAX : namelen);
+            mnode->driver = media_plugins[index];
+
+            return mnode;
+        }
+
+        index++;
+    }
+
+    return NULL;
+}
+
+#include "_audio_init.c"
+#include "_audio_indexer.c"
+#include "_audio_method.c"
 
 static double _get_normalized_volume(snd_mixer_elem_t *elem)
 {
@@ -546,189 +479,45 @@ char* _next_todo(AudioEntry *me)
     }
 }
 
-static bool _flac_play(AudioEntry *me)
-{
-    AudioTrack *track = me->track;
-    struct MediaFlac *flac = &track->flac;
-
-    track->playing = false;
-
-    int rv = snd_pcm_set_params(me->pcm,
-                                SND_PCM_FORMAT_S32_LE, SND_PCM_ACCESS_RW_INTERLEAVED,
-                                track->channels, track->hz, 1, 100000);
-    if (rv < 0) {
-        mtc_mt_err("can't set parameter. %s", snd_strerror(rv));
-        return false;
-    }
-
-    track->playing = true;
-
-    int samples = 0;
-    while ((samples = drflac_read_pcm_frames_s32(flac->pflac, FLAC_DECODE_SAMPLE,
-                                                 flac->psamples)) > 0) {
-        if (me->act != ACT_NONE) {
-            mtc_mt_dbg("%s while playing", _action_string(me->act));
-            track->playing = false;
-            return false;
-        }
-
-        rv = snd_pcm_writei(me->pcm, flac->psamples, samples);
-        if (rv == -EPIPE) {
-            mtc_mt_warn("XRUN");
-            snd_pcm_prepare(me->pcm);
-        }
-
-        track->samples_eat += rv;
-        track->percent = (float)track->samples_eat / track->samples;
-    }
-
-    /* 播放正常完成 */
-    track->percent = 0;
-    track->playing = false;
-    me->pcm_param_seted = false;
-
-    return true;
-}
-
-static int _iterate_callback(void *user_data, const uint8_t *frame, int frame_size,
-                             int free_format_bytes, size_t buf_size, uint64_t offset,
-                             mp3dec_frame_info_t *info)
-{
-    static int channels = 0, hz = 0;
-
-    AudioEntry *me = (AudioEntry*)user_data;
-    AudioTrack *track = me->track;
-    struct MediaMp3 *mp3 = &track->mp3;
-
-    if (track->playing && me->act != ACT_NONE) {
-        mtc_mt_dbg("%s while playing", _action_string(me->act));
-        track->playing = false;
-        me->pcm_param_seted = false;
-        return 1;
-    }
-
-    if (!track->playing) {
-        me->pcm_param_seted = false;
-        track->playing = true;
-    }
-
-    int rv;
-
-    if (!frame) {
-        /* 播放正常完成 */
-        mtc_mt_dbg("play done");
-        track->percent = 0;
-        track->playing = false;
-        me->pcm_param_seted = false;
-        return 1;
-    }
-
-    if (!me->pcm_param_seted) {
-        if (info->channels != channels || info->hz != hz) {
-            mtc_mt_dbg("set pcm params %d %dHZ", info->channels, info->hz);
-            if ((rv = snd_pcm_set_params(me->pcm,
-                                         SND_PCM_FORMAT_S16_LE, SND_PCM_ACCESS_RW_INTERLEAVED,
-                                         info->channels, info->hz, 1, 100000)) < 0) {
-                mtc_mt_err("can't set parameter. %s", snd_strerror(rv));
-                track->percent = 0;
-                track->playing = false;
-                return 1;
-            }
-            channels = info->channels;
-            hz = info->hz;
-        }
-        me->pcm_param_seted = true;
-    }
-
-    memset(mp3->buffer, 0x0, sizeof(mp3->buffer));
-    int samples = mp3dec_decode_frame(&mp3->mp3d, frame, frame_size, mp3->buffer, info);
-    if (samples > 0) {
-        rv = snd_pcm_writei(me->pcm, mp3->buffer, samples);
-        if (rv == -EPIPE) {
-            mtc_mt_warn("XRUN");
-            snd_pcm_prepare(me->pcm);
-        }
-
-        track->samples_eat += rv;
-        track->percent = (float)track->samples_eat / track->samples;
-    } else mtc_mt_warn("decode frame failure");
-
-    return 0;
-}
-
-static MEDIA_TYPE _media_open(const char *filename, AudioTrack *track)
-{
-    if (!filename || !track) return MEDIA_UNKNOWN;
-
-    struct MediaMp3 *mp3 = &track->mp3;
-    struct MediaFlac *flac = &track->flac;
-
-    mp3dec_init(&mp3->mp3d);
-    if (mp3->file.buffer != 0 && mp3->file.size != 0) {
-        mp3dec_close_file(&mp3->file);
-        mp3->file.buffer = NULL;
-        mp3->file.size = 0;
-    }
-
-    if (flac->pflac) {
-        drflac_close(flac->pflac);
-        flac->pflac = NULL;
-    }
-
-    if ((flac->pflac = drflac_open_file(filename, NULL)) != NULL) {
-        uint8_t bps = flac->pflac->bitsPerSample;
-        track->samples = flac->pflac->totalPCMFrameCount;
-        track->channels = flac->pflac->channels;
-        track->hz = flac->pflac->sampleRate;
-        track->kbps = bps * track->channels * track->hz / 1000;
-        track->length = (uint32_t)track->samples / track->hz + 1;
-
-        return MEDIA_FLAC;
-    } else if (mp3dec_open_file(filename, &mp3->file) == 0) {
-        if (mp3dec_detect_buf(mp3->file.buffer, mp3->file.size) == 0) {
-            if (mp3dec_iterate_buf(mp3->file.buffer, mp3->file.size, _iterate_track, track) == 0) {
-                track->length = (uint32_t)track->samples / track->hz + 1;
-
-                return MEDIA_MP3;
-            }
-        }
-
-        mp3dec_close_file(&mp3->file);
-    }
-
-    return MEDIA_UNKNOWN;
-}
-
 static bool _play_raw(AudioEntry *me, char *filename, DommeFile *mfile)
 {
     if (!me || !me->pcm || !filename || !me->track) return false;
 
-    AudioTrack *track = me->track;
+    struct audioTrack *track = me->track;
     track->playing = false;
+    memset(&track->tinfo, 0x0, sizeof(TechInfo));
+    track->media_switch = false;
 
-    track->samples = 0;
-    track->channels = 0;
-    track->hz = 0;
-    track->kbps = 0;
-    track->length = 0;
+    MediaNode *mnode = mediaOpen(filename);
+    if (!mnode) {
+        mtc_mt_err("can't open media file %s", filename);
+        return false;
+    }
+
+    TechInfo *tinfo = mnode->driver->tech_info_get(mnode);
+    if (!tinfo) {
+        mtc_mt_err("can't get tech info %s", filename);
+        return false;
+    }
+
+    memcpy(&track->tinfo, tinfo, sizeof(TechInfo));
+    if (track->media_type != mnode->driver->type) {
+        track->media_switch = true;
+        track->media_type = mnode->driver->type;
+        track->media_name = mnode->driver->name;
+    }
 
     if (me->act != ACT_DRAG && me->act != ACT_RESUME) {
         track->percent = 0;
         track->samples_eat = 0;
-    } else track->samples_eat = track->samples * track->percent;
-
-    track->type = _media_open(filename, track);
-    if (track->type == MEDIA_UNKNOWN) {
-        mtc_mt_err("can't open media file %s", filename);
-        return false;
-    }
+    } else track->samples_eat = track->tinfo.samples * track->percent;
 
     mtc_mt_dbg("playing %s %s %.2f", mfile->id, filename, track->percent);
 
     /* 广播媒体信息 */
     mtc_mt_dbg("%s %s, %ju samples, %d HZ, %d kbps, %u seconds",
-               _media_string(track->type), track->channels == 2 ? "Stero" : "Mono",
-               track->samples, track->hz, track->kbps, track->length);
+               mnode->driver->name, track->tinfo.channels == 2 ? "Stero" : "Mono",
+               track->tinfo.samples, track->tinfo.hz, track->tinfo.kbps, track->tinfo.length);
 
     Channel *slot = channelFind(me->base.channels, "PLAYING_INFO", false);
     if (!channelEmpty(slot) && mfile) {
@@ -737,15 +526,15 @@ static bool _play_raw(AudioEntry *me, char *filename, DommeFile *mfile)
         MDF *dnode;
         mdf_init(&dnode);
         mdf_set_value(dnode, "id", track->id);
-        mdf_set_int_value(dnode ,"length", track->length);
-        mdf_set_int_value(dnode, "pos", track->length * track->percent);
+        mdf_set_int_value(dnode ,"length", track->tinfo.length);
+        mdf_set_int_value(dnode, "pos", track->tinfo.length * track->percent);
         mdf_set_value(dnode, "title", mfile->title);
         mdf_set_value(dnode, "artist", mfile->artist->name);
         mdf_set_value(dnode, "album", mfile->disk->title);
 
-        mdf_set_value(dnode, "file_type", _media_string(track->type));
-        mdf_set_valuef(dnode, "bps=%dkbps", track->kbps);
-        mdf_set_valuef(dnode, "rate=%.1fkhz", (float)track->hz / 1000);
+        mdf_set_value(dnode, "file_type", mnode->driver->name);
+        mdf_set_valuef(dnode, "bps=%dkbps", track->tinfo.kbps);
+        mdf_set_valuef(dnode, "rate=%.1fkhz", (float)track->tinfo.hz / 1000);
         mdf_set_double_value(dnode, "volume", _get_normalized_volume(me->mixer));
         mdf_set_bool_value(dnode, "shuffle", me->shuffle);
 
@@ -761,45 +550,13 @@ static bool _play_raw(AudioEntry *me, char *filename, DommeFile *mfile)
     /* 播放 */
     me->act = ACT_NONE;
 
-    switch (track->type) {
-    case MEDIA_WAV:
-        break;
-    case MEDIA_FLAC:
-    {
-        if (track->percent != 0) {
-            drflac_uint64 index = track->samples * track->percent;
-            drflac_seek_to_pcm_frame(track->flac.pflac, index);
-        }
-
-        if (!_flac_play(me)) {
-            mtc_mt_err("play buffer error");
-
-            drflac_close(track->flac.pflac);
-            return false;
-        }
-
-        drflac_close(track->flac.pflac);
-    }
-    break;
-    case MEDIA_MP3:
-    {
-        struct MediaMp3 *mp3 = &track->mp3;
-        size_t offset = track->percent == 0.0 ? 0 : mp3->file.size * track->percent;
-
-        if (mp3dec_iterate_buf(mp3->file.buffer + offset,
-                               mp3->file.size - offset, _iterate_callback, me) != 0) {
-            mtc_mt_err("play buffer error failure");
-            mp3dec_close_file(&mp3->file);
-            return false;
-        }
-
-        mp3dec_close_file(&mp3->file);
-    }
-    break;
-    default:
-        break;
+    if (!mnode->driver->play(mnode, me)) {
+        mtc_mt_err("play %s failure", filename);
+        mnode->driver->close(mnode);
+        return false;
     }
 
+    mnode->driver->close(mnode);
     return true;
 }
 
@@ -807,7 +564,7 @@ static bool _play(AudioEntry *me)
 {
     if (!me || !me->pcm || !me->plan || !me->track || !me->track->id) return false;
 
-    AudioTrack *track = me->track;
+    struct audioTrack *track = me->track;
     DommeStore *plan = me->plan;
 
     DommeFile *mfile = dommeGetFile(plan, track->id);
@@ -824,7 +581,7 @@ static bool _play(AudioEntry *me)
 static void* _player(void *arg)
 {
     AudioEntry *me = (AudioEntry*)arg;
-    AudioTrack *track = me->track;
+    struct audioTrack *track = me->track;
     int rv = 0;
 
     int loglevel = mtc_level_str2int(mdf_get_value(g_config, "trace.worker", "debug"));
@@ -993,7 +750,7 @@ static bool _push_trackinfo(void *data)
 bool audio_process(BeeEntry *be, QueueEntry *qe)
 {
     AudioEntry *me = (AudioEntry*)be;
-    AudioTrack *track = me->track;
+    struct audioTrack *track = me->track;
 
     mtc_mt_dbg("process command %d", qe->command);
     MDF_TRACE_MT(qe->nodein);
@@ -1014,15 +771,15 @@ bool audio_process(BeeEntry *be, QueueEntry *qe)
             DommeFile *mfile = dommeGetFile(me->plan, track->id);
             if (mfile) {
                 mdf_set_value(qe->nodeout, "id", track->id);
-                mdf_set_int_value(qe->nodeout ,"length", track->length);
-                mdf_set_int_value(qe->nodeout, "pos", track->length * track->percent);
+                mdf_set_int_value(qe->nodeout ,"length", track->tinfo.length);
+                mdf_set_int_value(qe->nodeout, "pos", track->tinfo.length * track->percent);
                 mdf_set_value(qe->nodeout, "title", mfile->title);
                 mdf_set_value(qe->nodeout, "artist", mfile->artist->name);
                 mdf_set_value(qe->nodeout, "album", mfile->disk->title);
 
-                mdf_set_value(qe->nodeout, "file_type", "MP3");
-                mdf_set_valuef(qe->nodeout, "bps=%dkbps", track->kbps);
-                mdf_set_valuef(qe->nodeout, "rate=%.1fkhz", (float)track->hz / 1000);
+                mdf_set_value(qe->nodeout, "file_type", track->media_name);
+                mdf_set_valuef(qe->nodeout, "bps=%dkbps", track->tinfo.kbps);
+                mdf_set_valuef(qe->nodeout, "rate=%.1fkhz", (float)track->tinfo.hz / 1000);
                 mdf_set_double_value(qe->nodeout, "volume", _get_normalized_volume(me->mixer));
                 mdf_set_bool_value(qe->nodeout, "shuffle", me->shuffle);
             }
@@ -1047,15 +804,16 @@ bool audio_process(BeeEntry *be, QueueEntry *qe)
     break;
     case CMD_PLAY:
     {
-        mos_free(me->trackid);
-        mos_free(me->artist);
-        mos_free(me->album);
-
         char *id = mdf_get_value(qe->nodein, "id", NULL);
         char *name = mdf_get_value(qe->nodein, "name", NULL);
         char *title = mdf_get_value(qe->nodein, "title", NULL);
 
         if (id) {
+            /*
+             * TODO memory leak
+             * 此时释放内存，会导致播放线程往 playlist 里面加入历史记录的时候访问已释放内存空间，暂不释放
+             */
+            //mos_free(me->trackid);
             me->trackid = strdup(id);
         }
         if (name) {
@@ -1110,7 +868,6 @@ void audio_stop(BeeEntry *be)
     pthread_mutex_destroy(&me->lock);
     pthread_mutex_destroy(&me->index_lock);
 
-    mos_free(me->track->flac.psamples);
     mos_free(me->track);
     mlist_destroy(&me->plans);
     mlist_destroy(&me->playlist);
@@ -1141,23 +898,17 @@ BeeEntry* _start_audio()
     me->dragto = 0.0;
     mlist_init(&me->playlist, free);
 
-    me->track = mos_calloc(1, sizeof(AudioTrack));
-    memset(me->track, 0x0, sizeof(AudioTrack));
+    me->track = mos_calloc(1, sizeof(struct audioTrack));
+    memset(me->track, 0x0, sizeof(struct audioTrack));
     me->track->id = NULL;
     me->track->playing = false;
 
-    me->track->samples = 0;
-    me->track->samples_eat = 0;
-    me->track->channels = 0;
-    me->track->hz = 0;
-    me->track->kbps = 0;
-    me->track->length = 0;
+    memset(&me->track->tinfo, 0x0, sizeof(TechInfo));
+    me->track->media_type = MEDIA_UNKNOWN;
+    me->track->media_name = NULL;
+    me->track->media_switch = true;
     me->track->percent = 0;
-    me->track->type = MEDIA_UNKNOWN;
-
-    mp3dec_init(&me->track->mp3.mp3d);
-    me->track->flac.pflac = NULL;
-    me->track->flac.psamples = malloc(FLAC_DECODE_BUFLEN);
+    me->track->samples_eat = 0;
 
     int rv = snd_pcm_open(&me->pcm, "default", SND_PCM_STREAM_PLAYBACK, 0);
     if (rv < 0) {

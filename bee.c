@@ -5,14 +5,6 @@
 #include "net.h"
 #include "bee.h"
 
-#define MINIMP3_IMPLEMENTATION
-#define MINIMP3_ALLOW_MONO_STEREO_TRANSITION
-#include "minimp3_ex.h"
-#include "mp3.h"
-
-#define DR_FLAC_IMPLEMENTATION
-#include "dr_flac.h"
-
 #include "_bee_hardware.c"
 #include "_bee_storage.c"
 #include "_bee_audio.c"
