@@ -160,7 +160,7 @@ static TechInfo* _mp3_get_tinfo(MediaNode *mnode)
     MediaNodeMp3 *mp3node = (MediaNodeMp3*)mnode;
 
     mp3dec_iterate_buf(mp3node->file.buffer, mp3node->file.size, _iterate_info, &mnode->tinfo);
-    mnode->tinfo.length = (uint32_t)mnode->tinfo.samples / mnode->tinfo.hz + 1;
+    mnode->tinfo.length = (int)(mnode->tinfo.samples / mnode->tinfo.hz) + 1;
     mnode->ainfo.length = mnode->tinfo.length;
 
     return &mnode->tinfo;

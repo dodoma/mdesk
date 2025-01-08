@@ -80,9 +80,23 @@ DommeAlbum* albumFind(MLIST *albums, char *title)
     return NULL;
 }
 
-void dommeFileFree(void *key, void *val)
+void dommeFileFreeHash(void *key, void *val)
 {
+    if (!val) return;
+
     DommeFile *mfile = (DommeFile*)val;
+
+    /* dir free in StoreFree */
+    mos_free(mfile->name);
+    mos_free(mfile->title);
+    mos_free(mfile);
+}
+
+void DommeFileFree(void *ptr)
+{
+    if (!ptr) return;
+
+    DommeFile *mfile = (DommeFile*)ptr;
 
     /* dir free in StoreFree */
     mos_free(mfile->name);
@@ -135,6 +149,27 @@ void artistFree(void *p)
     mos_free(artist);
 }
 
+DommeFile* dommeGetFile(DommeStore *plan, char *id)
+{
+    if (!plan || !id) return NULL;
+
+    return mhash_lookup(plan->mfiles, (void*)id);
+}
+
+DommeFile* dommeGetPos(DommeStore *plan, uint32_t pos)
+{
+    if (!plan) return NULL;
+
+    char *key;
+    DommeFile *mfile;
+    MHASH_ITERATE(plan->mfiles, key, mfile) {
+        if (pos == 0) return mfile;
+        else pos--;
+    }
+
+    return NULL;
+}
+
 DommeStore* dommeStoreCreate()
 {
     DommeStore *plan = mos_calloc(1, sizeof(DommeStore));
@@ -146,7 +181,7 @@ DommeStore* dommeStoreCreate()
     plan->count_touched = 0;
 
     mlist_init(&plan->dirs, free);
-    mhash_init(&plan->mfiles, mhash_str_hash, mhash_str_comp, dommeFileFree);
+    mhash_init(&plan->mfiles, mhash_str_hash, mhash_str_comp, dommeFileFreeHash);
     mlist_init(&plan->artists, artistFree);
 
     return plan;
@@ -220,7 +255,7 @@ MERR* dommeLoadFromFile(char *filename, DommeStore *plan)
 
             MDF *song = mdf_get_child(artnode, "d");
             while (song) {
-                if (mdf_child_count(song, NULL) != 5) goto nextsong;
+                if (mdf_child_count(song, NULL) != 6) goto nextsong;
 
                 char *id = mdf_get_value(song, "[0]", NULL);
                 char *name = mdf_get_value(song, "[1]", NULL);
@@ -236,7 +271,8 @@ MERR* dommeLoadFromFile(char *filename, DommeStore *plan)
                 mfile->title = strdup(title);
 
                 mfile->sn = mdf_get_int_value(song, "[3]", 0);
-                mfile->length = mdf_get_int_value(song, "[4]", 0);
+                mfile->index = mdf_get_int_value(song, "[4]", 0);
+                mfile->length = mdf_get_int_value(song, "[5]", 0);
                 mfile->touched = false;
 
                 mfile->artist = artist;
@@ -366,7 +402,8 @@ bool dommeStoreDumpFile(DommeStore *plan, char *filename)
         mdf_set_value(mnode, "1", mfile->name);
         mdf_set_value(mnode, "2", mfile->title);
         mdf_set_int_value(mnode, "3", mfile->sn);
-        mdf_set_int_value(mnode, "4", mfile->length);
+        mdf_set_int_value(mnode, "4", mfile->index);
+        mdf_set_int_value(mnode, "5", mfile->length);
 
         mdf_object_2_array(mnode, NULL);
         mdf_object_2_array(tnode, "d");
@@ -444,6 +481,46 @@ bool dommeStoreReplace(AudioEntry *me, DommeStore *plan)
         mlist_set(me->plans, index, plan);
         dommeStoreFree(olan);
     } else mlist_append(me->plans, plan);
+
+    return true;
+}
+
+bool dommeStoreAddTrack(DommeStore *plan, DommeFile *mfile, char *sartist, char *salbum, char *syear)
+{
+    char filename[PATH_MAX];
+    if (!plan || !plan->mfiles || !mfile || !sartist || !salbum) return false;
+
+    if (mhash_lookup(plan->mfiles, mfile->id)) {
+        /* TODO file length verify, and id crash process */
+        snprintf(filename, sizeof(filename), "%s%s%s", plan->basedir, mfile->dir, mfile->name);
+        mtc_mt_dbg("%s already exist", filename);
+
+        remove(filename);
+        DommeFileFree(mfile);
+        return false;
+    }
+
+    DommeArtist *artist = artistFind(plan->artists, sartist);
+    if (!artist) {
+        artist = artistCreate(sartist);
+        mlist_append(plan->artists, artist);
+    }
+    DommeAlbum *disk = albumFind(artist->albums, salbum);
+    if (!disk) {
+        disk = albumCreate(salbum);
+        disk->year = strdup(syear);
+        mlist_append(artist->albums, disk);
+        plan->count_album++;
+    }
+
+    mfile->artist = artist;
+    mfile->disk = disk;
+
+    mlist_append(disk->tracks, mfile);
+    artist->count_track++;
+
+    mhash_insert(plan->mfiles, mfile->id, mfile);
+    plan->count_track++;
 
     return true;
 }

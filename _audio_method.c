@@ -334,9 +334,9 @@ int storeMediaCopy(DommeStore *plan, char *pathfrom, char *pathto, bool recursiv
                 mediaID[LEN_DOMMEID-1] = '\0';
 
                 mnode->driver->close(mnode);
-            } else continue;
+            } else if (assetType(srcfile) == ASSET_UNKNOWN) continue;
 
-            if (dommeGetFile(plan, mediaID)) {
+            if (mnode && dommeGetFile(plan, mediaID)) {
                 mtc_mt_dbg("file %s exist, skip", srcfile);
                 continue;
             } else mtc_mt_dbg("COPY %s %s", srcfile, mediaID);

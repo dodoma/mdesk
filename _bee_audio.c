@@ -27,6 +27,11 @@ MediaEntry *media_plugins[] = {
     NULL
 };
 
+ASSET_TYPE assetType(const char *filename)
+{
+    return ASSET_UNKNOWN;
+}
+
 MEDIA_TYPE mediaType(const char *filename)
 {
 
@@ -160,27 +165,6 @@ uint32_t dommeFreeReset(DommeStore *plan)
     plan->pos = 0;
 
     return plan->count_track;
-}
-
-DommeFile* dommeGetFile(DommeStore *plan, char *id)
-{
-    if (!plan || !id) return NULL;
-
-    return mhash_lookup(plan->mfiles, (void*)id);
-}
-
-DommeFile* dommeGetPos(DommeStore *plan, uint32_t pos)
-{
-    if (!plan) return NULL;
-
-    char *key;
-    DommeFile *mfile;
-    MHASH_ITERATE(plan->mfiles, key, mfile) {
-        if (pos == 0) return mfile;
-        else pos--;
-    }
-
-    return NULL;
 }
 
 uint32_t albumFreeCount(DommeAlbum *disk)
@@ -508,11 +492,17 @@ static bool _play_raw(AudioEntry *me, char *filename, DommeFile *mfile)
     }
 
     if (me->act != ACT_DRAG && me->act != ACT_RESUME) {
-        track->percent = 0;
-        track->samples_eat = 0;
+        if (!mfile || mfile->index == 0) {
+            track->percent = 0;
+            track->samples_eat = 0;
+        } else {
+            /* CUE 脚本指定了曲目起始位置 */
+            track->percent = (float)mfile->index / (mfile->length * 1000);
+            track->samples_eat = track->tinfo.samples * track->percent;
+        }
     } else track->samples_eat = track->tinfo.samples * track->percent;
 
-    mtc_mt_dbg("playing %s %s %.2f", mfile->id, filename, track->percent);
+    mtc_mt_dbg("playing %s %s %.2f", mfile ? mfile->id : "", filename, track->percent);
 
     /* 广播媒体信息 */
     mtc_mt_dbg("%s %s, %ju samples, %d HZ, %d kbps, %u seconds",

@@ -89,7 +89,7 @@ static MediaNode* _flac_open(const char *filename)
         mnode->base.tinfo.channels = pflac->channels;
         mnode->base.tinfo.hz = pflac->sampleRate;
         mnode->base.tinfo.kbps = bps * pflac->channels * pflac->sampleRate / 1000;
-        mnode->base.tinfo.length = (uint32_t)pflac->totalPCMFrameCount / pflac->sampleRate + 1;
+        mnode->base.tinfo.length = (int)(pflac->totalPCMFrameCount / pflac->sampleRate) + 1;
         mnode->base.ainfo.length = mnode->base.tinfo.length;
 
         return (MediaNode*)mnode;
@@ -110,7 +110,10 @@ static ArtInfo* _flac_get_ainfo(MediaNode *mnode)
 {
     if (!mnode) return NULL;
 
-    return &mnode->ainfo;
+    if (mnode->ainfo.title[0] == 0 ||
+        mnode->ainfo.artist[0] == 0 ||
+        mnode->ainfo.album[0] == 0) return NULL;
+    else return &mnode->ainfo;
 }
 
 static uint8_t* _flac_get_cover(MediaNode *mnode, size_t *imagelen)

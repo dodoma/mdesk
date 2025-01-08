@@ -4,6 +4,7 @@
 #include "packet.h"
 #include "net.h"
 #include "bee.h"
+#include "cue.h"
 
 #include "_bee_hardware.c"
 #include "_bee_storage.c"

@@ -118,7 +118,17 @@ static void _remove_watch(AudioEntry *me, DommeStore *plan)
 }
 
 /*
- * /home/pi/music/Steve Ray Vaughan/Track01.mp3
+ * (plan->basedir = /home/pi/music/default/)
+ * /home/pi/music/default/Track01.mp3
+ * ==> *path = ""
+ *     *name = Track01.mp3
+ *
+ * /home/pi/music/default/Steve Ray Vaughan/Track01.mp3
+ * ==> *path = Steve Ray Vaughan/ in plan->dirs
+ *     *name = Track01.mp3
+ *
+ * /home/pi/music/20210201/cu/Dire Straits - Private Investigations - The Best Of (CD2).cue
+ * /home/pi/music/20210201/cu/Dire Straits & - Private Investigations - The Best Of (CD2).flac
  */
 static bool _extract_filename(char *filename, DommeStore *plan, char **path, char **name)
 {
@@ -253,10 +263,8 @@ static void* _index_music(void *arg)
     char *fpath, *fname;
 
     DommeFile *mfile;
-    DommeAlbum *disk;
-    DommeArtist *artist;
-
     MediaNode *mnode;
+    CueSheet *centry;
     ArtInfo *ainfo;
 
     int indexcount = 0;
@@ -274,6 +282,7 @@ static void* _index_music(void *arg)
 
     while (filename) {
         mfile = NULL;
+        centry = NULL;
 
         if (!_extract_filename(filename, plan, &fpath, &fname)) {
             mtc_mt_dbg("extract %s failure", filename);
@@ -288,6 +297,7 @@ static void* _index_music(void *arg)
 
                 memcpy(mfile->id, mnode->md5, LEN_DOMMEID);
                 mfile->id[LEN_DOMMEID-1] = '\0';
+                mfile->index = 0;
                 mfile->length = ainfo->length;
                 mfile->dir = fpath;
                 mfile->name = strdup(fname);
@@ -299,43 +309,37 @@ static void* _index_music(void *arg)
                            ainfo->artist, ainfo->title, ainfo->album, ainfo->track);
                 //mtc_mt_dbg("%s %s", filename, mfile->id);
             }
-        }
+        } else centry = cueOpen(filename);
 
     nextone:
         pthread_mutex_lock(&m_indexer_lock);
-        if (mfile) {
-            if (mhash_lookup(plan->mfiles, mfile->id)) {
-                /* TODO file length verify, and id crash process */
-                mtc_mt_dbg("%s already exist", filename);
+        if (mfile) dommeStoreAddTrack(plan, mfile, ainfo->artist, ainfo->album, ainfo->year);
+        else if (centry) {
+            cueDump(centry);
+            CueTrack *track;
+            MLIST_ITERATE(centry->tracks, track) {
+                mfile = mos_calloc(1, sizeof(DommeFile));
 
-                remove(filename);
-                dommeFileFree(mfile->id, mfile);
-            } else {
-                artist = artistFind(plan->artists, ainfo->artist);
-                if (!artist) {
-                    artist = artistCreate(ainfo->artist);
-                    mlist_append(plan->artists, artist);
-                }
-                disk = albumFind(artist->albums, ainfo->album);
-                if (!disk) {
-                    disk = albumCreate(ainfo->album);
-                    disk->year = strdup(ainfo->year);
-                    mlist_append(artist->albums, disk);
-                    plan->count_album++;
-                }
+                memcpy(mfile->id, track->md5, LEN_DOMMEID);
+                mfile->id[LEN_DOMMEID-1] = '\0';
+                mfile->index = track->index1;
+                mfile->length = centry->length;
+                mfile->dir = fpath;
+                mfile->name = strdup(centry->filename);
+                mfile->title = strdup(track->title);
+                mfile->sn = track->sn;
+                mfile->touched = false;
 
-                mfile->artist = artist;
-                mfile->disk = disk;
+                mtc_mt_dbg("%s %s: %s %s %s %d", filename, mfile->id,
+                           centry->artist, centry->album, track->title, mfile->sn);
+                //mtc_mt_dbg("%s %s", filename, mfile->id);
 
-                mlist_append(disk->tracks, mfile);
-                artist->count_track++;
-
-                mhash_insert(plan->mfiles, mfile->id, mfile);
-                plan->count_track++;
-
-                indexcount++;
+                dommeStoreAddTrack(plan, mfile, centry->artist, centry->album, centry->date);
             }
+
+            cueFree(centry);
         }
+
         if (mnode) mnode->driver->close(mnode);
         filename = mlist_popx(arga->files);
         pthread_mutex_unlock(&m_indexer_lock);
@@ -503,11 +507,10 @@ struct watcher* indexerWatch(int efd, struct watcher *seeds, AudioEntry *me)
     char *ptr;
 
     DommeFile *mfile;
-    DommeAlbum *disk;
-    DommeArtist *artist;
     DommeStore *plan;
 
     MediaNode *mnode;
+    CueSheet *centry;
     ArtInfo *ainfo;
 
     /* Loop while events can be read from inotify file descriptor. */
@@ -628,6 +631,7 @@ struct watcher* indexerWatch(int efd, struct watcher *seeds, AudioEntry *me)
                     mtc_mt_dbg("%s%s CREATE file %s", plan->basedir, arg->path, event->name);
 
                     mfile = NULL;
+                    centry = NULL;
 
                     if (!_extract_filename(filename, plan, &fpath, &fname)) {
                         mtc_mt_warn("extract %s failure", filename);
@@ -642,6 +646,7 @@ struct watcher* indexerWatch(int efd, struct watcher *seeds, AudioEntry *me)
 
                             memcpy(mfile->id, mnode->md5, LEN_DOMMEID);
                             mfile->id[LEN_DOMMEID-1] = '\0';
+                            mfile->index = 0;
                             mfile->length = ainfo->length;
                             mfile->dir = fpath;
                             mfile->name = strdup(event->name);
@@ -649,41 +654,44 @@ struct watcher* indexerWatch(int efd, struct watcher *seeds, AudioEntry *me)
                             mfile->sn = atoi(ainfo->track);
                             mfile->touched = false;
                         }
-
-                    }
-
-                    if (mfile) {
-                        artist = artistFind(plan->artists, ainfo->artist);
-                        if (!artist) {
-                            artist = artistCreate(ainfo->artist);
-                            mlist_append(plan->artists, artist);
-                        }
-                        disk = albumFind(artist->albums, ainfo->album);
-                        if (!disk) {
-                            disk = albumCreate(ainfo->album);
-                            disk->year = strdup(ainfo->year);
-                            mlist_append(artist->albums, disk);
-                            plan->count_album++;
-                        }
-
-                        mfile->artist = artist;
-                        mfile->disk = disk;
-
-                        mlist_append(disk->tracks, mfile);
-                        artist->count_track++;
-
-                        mhash_insert(plan->mfiles, mfile->id, mfile);
-                        plan->count_track++;
-
-                        if (arg->on_dirty == 0) {
-                            /* 通知UI */
-                            _onStoreIndexing(me);
-                        }
-
-                        arg->on_dirty = g_ctime;
-                    }
+                    } else centry = cueOpen(filename);
 
                     if (mnode) mnode->driver->close(mnode);
+
+                    if (mfile)
+                        dommeStoreAddTrack(plan, mfile, ainfo->artist, ainfo->album, ainfo->year);
+                    else if (centry) {
+                        CueTrack *track;
+                        MLIST_ITERATE(centry->tracks, track) {
+                            mfile = mos_calloc(1, sizeof(DommeFile));
+
+                            memcpy(mfile->id, track->md5, LEN_DOMMEID);
+                            mfile->id[LEN_DOMMEID-1] = '\0';
+                            mfile->index = track->index1;
+                            mfile->length = centry->length;
+                            mfile->dir = fpath;
+                            mfile->name = strdup(centry->filename);
+                            mfile->title = strdup(track->title);
+                            mfile->sn = track->sn;
+                            mfile->touched = false;
+
+                            mtc_mt_dbg("%s %s: %s %s %s %d", filename, mfile->id,
+                                       centry->artist, centry->album, track->title, mfile->sn);
+                            //mtc_mt_dbg("%s %s", filename, mfile->id);
+
+                            dommeStoreAddTrack(plan, mfile,
+                                               centry->artist, centry->album, centry->date);
+                        }
+
+                        cueFree(centry);
+                    } else continue;
+
+                    if (arg->on_dirty == 0) {
+                        /* 通知UI */
+                        _onStoreIndexing(me);
+                    }
+
+                    arg->on_dirty = g_ctime;
                 } else if (event->mask & IN_DELETE) {
                     mtc_mt_dbg("%s%s DELETE file %s", plan->basedir, arg->path, event->name);
 
