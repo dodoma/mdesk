@@ -18,13 +18,6 @@ typedef enum {
 } PLAY_ACTION;
 
 typedef enum {
-    ASSET_UNKNOWN = 0,
-    ASSET_CUE,
-    ASSET_IMAGE,
-    ASSET_MEDIA
-} ASSET_TYPE;
-
-typedef enum {
     MEDIA_UNKNOWN = 0,
     MEDIA_WAV,
     MEDIA_FLAC,
@@ -191,7 +184,6 @@ typedef struct _media_entry {
     void       (*close)(MediaNode *mnode);
 } MediaEntry;
 
-ASSET_TYPE assetType(const char *filename);
 MEDIA_TYPE mediaType(const char *filename);
 MediaNode* mediaOpen(const char *filename);
 

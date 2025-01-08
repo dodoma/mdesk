@@ -11,6 +11,7 @@ typedef struct {
 } CueTrack;
 
 typedef struct {
+    char md5[33];
     char artist[256];
     char album[256];
     char date[64];

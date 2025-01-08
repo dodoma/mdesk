@@ -37,6 +37,7 @@ static void _scan_for_files(DommeStore *plan, const char *subdir, MLIST *filesok
 
         free(feps[i]);
     }
+    mos_free(feps);
 
     n = scandir(fullpath, &deps, _scan_directory, alphasort);
     for (int i = 0; i < n; i++) {
@@ -47,6 +48,7 @@ static void _scan_for_files(DommeStore *plan, const char *subdir, MLIST *filesok
 
         free(deps[i]);
     }
+    mos_free(deps);
 }
 
 static struct watcher* _add_watch(DommeStore *plan, char *subdir, int efd, struct watcher *seed)
@@ -264,8 +266,8 @@ static void* _index_music(void *arg)
 
     DommeFile *mfile;
     MediaNode *mnode;
-    CueSheet *centry;
     ArtInfo *ainfo;
+    CueSheet *centry;
 
     int indexcount = 0;
     static int threadsn = 0;
@@ -282,6 +284,8 @@ static void* _index_music(void *arg)
 
     while (filename) {
         mfile = NULL;
+        mnode = NULL;
+        ainfo = NULL;
         centry = NULL;
 
         if (!_extract_filename(filename, plan, &fpath, &fname)) {
@@ -289,33 +293,45 @@ static void* _index_music(void *arg)
             goto nextone;
         }
 
-        mnode = mediaOpen(filename);
-        if (mnode != NULL) {
-            ainfo = mnode->driver->art_info_get(mnode);
-            if (ainfo) {
-                mfile = mos_calloc(1, sizeof(DommeFile));
+        ASSET_TYPE ftype = assetType(filename);
+        switch (ftype) {
+        case ASSET_AUDIO:
+            mnode = mediaOpen(filename);
+            if (mnode != NULL) {
+                ainfo = mnode->driver->art_info_get(mnode);
+                if (ainfo) {
+                    mfile = mos_calloc(1, sizeof(DommeFile));
 
-                memcpy(mfile->id, mnode->md5, LEN_DOMMEID);
-                mfile->id[LEN_DOMMEID-1] = '\0';
-                mfile->index = 0;
-                mfile->length = ainfo->length;
-                mfile->dir = fpath;
-                mfile->name = strdup(fname);
-                mfile->title = strdup(ainfo->title);
-                mfile->sn = atoi(ainfo->track);
-                mfile->touched = false;
+                    memcpy(mfile->id, mnode->md5, LEN_DOMMEID);
+                    mfile->id[LEN_DOMMEID-1] = '\0';
+                    mfile->index = 0;
+                    mfile->length = ainfo->length;
+                    mfile->dir = fpath;
+                    mfile->name = strdup(fname);
+                    mfile->title = strdup(ainfo->title);
+                    mfile->sn = atoi(ainfo->track);
+                    mfile->touched = false;
 
-                mtc_mt_dbg("%s %s: %s %s %s %s", filename, mfile->id,
-                           ainfo->artist, ainfo->title, ainfo->album, ainfo->track);
-                //mtc_mt_dbg("%s %s", filename, mfile->id);
+                    mtc_mt_dbg("%s %s: %s %s %s %s", filename, mfile->id,
+                               ainfo->artist, ainfo->title, ainfo->album, ainfo->track);
+                    //mtc_mt_dbg("%s %s", filename, mfile->id);
+                }
             }
-        } else centry = cueOpen(filename);
+            break;
+        case ASSET_CUE:
+            centry = cueOpen(filename);
+            break;
+        default:
+            break;
+        }
 
     nextone:
         pthread_mutex_lock(&m_indexer_lock);
-        if (mfile) dommeStoreAddTrack(plan, mfile, ainfo->artist, ainfo->album, ainfo->year);
-        else if (centry) {
-            cueDump(centry);
+        if (mfile) {
+            dommeStoreAddTrack(plan, mfile, ainfo->artist, ainfo->album, ainfo->year);
+            indexcount++;
+        } else if (centry) {
+            //cueDump(centry);
             CueTrack *track;
             MLIST_ITERATE(centry->tracks, track) {
                 mfile = mos_calloc(1, sizeof(DommeFile));
@@ -335,7 +351,21 @@ static void* _index_music(void *arg)
                 //mtc_mt_dbg("%s %s", filename, mfile->id);
 
                 dommeStoreAddTrack(plan, mfile, centry->artist, centry->album, centry->date);
+                indexcount++;
             }
+
+            /* 将CUE脚本文件自身加入store, 以防止每次启动都会对其解析 */
+            mfile = mos_calloc(1, sizeof(DommeFile));
+            memcpy(mfile->id, centry->md5, LEN_DOMMEID);
+            mfile->id[LEN_DOMMEID-1] = '\0';
+            mfile->index = 0;
+            mfile->length = 0;
+            mfile->dir = fpath;
+            mfile->name = strdup(fname);
+            mfile->title = strdup("未知曲目.");
+            mfile->sn = 0;
+            mfile->touched = true;
+            dommeStoreAddTrack(plan, mfile, "未知艺术家", "未知专辑", "");
 
             cueFree(centry);
         }
@@ -631,6 +661,8 @@ struct watcher* indexerWatch(int efd, struct watcher *seeds, AudioEntry *me)
                     mtc_mt_dbg("%s%s CREATE file %s", plan->basedir, arg->path, event->name);
 
                     mfile = NULL;
+                    mnode = NULL;
+                    ainfo = NULL;
                     centry = NULL;
 
                     if (!_extract_filename(filename, plan, &fpath, &fname)) {
@@ -638,23 +670,26 @@ struct watcher* indexerWatch(int efd, struct watcher *seeds, AudioEntry *me)
                         continue;
                     }
 
-                    mnode = mediaOpen(filename);
-                    if (mnode != NULL) {
-                        ainfo = mnode->driver->art_info_get(mnode);
-                        if (ainfo) {
-                            mfile = mos_calloc(1, sizeof(DommeFile));
+                    ASSET_TYPE ftype = assetType(filename);
+                    if (ftype == ASSET_AUDIO) {
+                        mnode = mediaOpen(filename);
+                        if (mnode != NULL) {
+                            ainfo = mnode->driver->art_info_get(mnode);
+                            if (ainfo) {
+                                mfile = mos_calloc(1, sizeof(DommeFile));
 
-                            memcpy(mfile->id, mnode->md5, LEN_DOMMEID);
-                            mfile->id[LEN_DOMMEID-1] = '\0';
-                            mfile->index = 0;
-                            mfile->length = ainfo->length;
-                            mfile->dir = fpath;
-                            mfile->name = strdup(event->name);
-                            mfile->title = strdup(ainfo->title);
-                            mfile->sn = atoi(ainfo->track);
-                            mfile->touched = false;
+                                memcpy(mfile->id, mnode->md5, LEN_DOMMEID);
+                                mfile->id[LEN_DOMMEID-1] = '\0';
+                                mfile->index = 0;
+                                mfile->length = ainfo->length;
+                                mfile->dir = fpath;
+                                mfile->name = strdup(event->name);
+                                mfile->title = strdup(ainfo->title);
+                                mfile->sn = atoi(ainfo->track);
+                                mfile->touched = false;
+                            }
                         }
-                    } else centry = cueOpen(filename);
+                    } else if (ftype == ASSET_CUE) centry = cueOpen(filename);
 
                     if (mnode) mnode->driver->close(mnode);
 
@@ -682,6 +717,19 @@ struct watcher* indexerWatch(int efd, struct watcher *seeds, AudioEntry *me)
                             dommeStoreAddTrack(plan, mfile,
                                                centry->artist, centry->album, centry->date);
                         }
+
+                        /* 将CUE脚本文件自身加入store, 以防止每次启动都会对其解析 */
+                        mfile = mos_calloc(1, sizeof(DommeFile));
+                        memcpy(mfile->id, centry->md5, LEN_DOMMEID);
+                        mfile->id[LEN_DOMMEID-1] = '\0';
+                        mfile->index = 0;
+                        mfile->length = 0;
+                        mfile->dir = fpath;
+                        mfile->name = strdup(fname);
+                        mfile->title = strdup("未知曲目.");
+                        mfile->sn = 0;
+                        mfile->touched = true;
+                        dommeStoreAddTrack(plan, mfile, "未知艺术家", "未知专辑", "");
 
                         cueFree(centry);
                     } else continue;

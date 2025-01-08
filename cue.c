@@ -78,6 +78,11 @@ static void _on_file(char *content, CueSheet *centry)
 {
     TAKEOFF_WRAP(content, "WAVE");
 
+    if (centry->filename[0]) {
+        mtc_mt_warn("DON'T support FILE command under TRACK");
+        return;
+    }
+
     int dirlen = strlen(centry->fullname);
     if (centry->fullname[dirlen-1] != '/') {
         centry->fullname[dirlen] = '/';
@@ -192,7 +197,7 @@ CueSheet* cueOpen(const char *filename)
         strncpy(centry->fullname, filename, sizeof(centry->fullname) - 1);
         dirname(centry->fullname);
 
-        centry->_trackbuf = mos_calloc(1, strlen(filename) + fs.st_size);
+        centry->_trackbuf = mos_calloc(1, strlen(filename) + fs.st_size + 6);
         memcpy(centry->_trackbuf, filename, strlen(filename));
         centry->_buflen = strlen(filename);
 
@@ -217,6 +222,14 @@ CueSheet* cueOpen(const char *filename)
         }
 
         fclose(fp);
+
+        /* 给本大王打上标记，不要重复骚扰我 */
+        uint8_t checksum[16] = {0};
+        memcpy(centry->_trackbuf + centry->_buflen, "TOKEND", 6);
+        centry->_buflen += 6;
+        mhash_md5_buf(centry->_trackbuf, centry->_buflen, checksum);
+        mstr_bin2hexstr(checksum, 16, centry->md5);
+        mstr_tolower(centry->md5);
 
         /* cue 文件中，如果没有媒体文件、或者音轨，则舍弃该文件 */
         if (!centry->filename[0] || mlist_length(centry->tracks) <= 0) {
@@ -285,9 +298,9 @@ void cueDump(CueSheet *centry)
 {
     if (!centry) return;
 
-    mtc_mt_dbg("CueSheet %s\n\t%s\t%s\t%s\t%s with %d tracks in %d seconds",
+    mtc_mt_dbg("CueSheet %s\n\t.10s%s\t%s\t%s\t%s\t%s with %d tracks in %d seconds",
                centry->fullname,
-               centry->artist, centry->album, centry->date, centry->genre,
+               centry->md5, centry->artist, centry->album, centry->date, centry->genre,
                mlist_length(centry->tracks), centry->length);
 
     CueTrack *track;

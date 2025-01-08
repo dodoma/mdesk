@@ -328,13 +328,17 @@ int storeMediaCopy(DommeStore *plan, char *pathfrom, char *pathto, bool recursiv
 
             memset(mediaID, 0x0, LEN_DOMMEID);
 
-            MediaNode *mnode = mediaOpen(srcfile);
-            if (mnode) {
-                memcpy(mediaID, mnode->md5, LEN_DOMMEID);
-                mediaID[LEN_DOMMEID-1] = '\0';
+            MediaNode *mnode = NULL;
+            ASSET_TYPE ftype = assetType(srcfile);
+            if (ftype == ASSET_AUDIO) {
+                mnode = mediaOpen(srcfile);
+                if (mnode) {
+                    memcpy(mediaID, mnode->md5, LEN_DOMMEID);
+                    mediaID[LEN_DOMMEID-1] = '\0';
 
-                mnode->driver->close(mnode);
-            } else if (assetType(srcfile) == ASSET_UNKNOWN) continue;
+                    mnode->driver->close(mnode);
+                } else continue;
+            } else if (ftype == ASSET_UNKNOWN) continue;
 
             if (mnode && dommeGetFile(plan, mediaID)) {
                 mtc_mt_dbg("file %s exist, skip", srcfile);

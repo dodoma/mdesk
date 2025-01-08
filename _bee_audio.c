@@ -2,6 +2,7 @@
 #include <sys/inotify.h>
 #include <dirent.h>
 #include <iconv.h>
+#include <libgen.h>
 
 static char* _action_string(PLAY_ACTION act)
 {
@@ -18,6 +19,8 @@ static char* _action_string(PLAY_ACTION act)
     }
 }
 
+static int _scan_directory(const struct dirent *ent);
+
 #include "_media_mp3.c"
 #include "_media_flac.c"
 
@@ -26,11 +29,6 @@ MediaEntry *media_plugins[] = {
     &media_flac.base,
     NULL
 };
-
-ASSET_TYPE assetType(const char *filename)
-{
-    return ASSET_UNKNOWN;
-}
 
 MEDIA_TYPE mediaType(const char *filename)
 {

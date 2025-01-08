@@ -11,7 +11,7 @@ INCS = $(INCBASE) -I ./deps/minimp3/ -I ./deps/dr_libs/
 LIBS = $(LIBBASE)
 
 INCS += -I/usr/include/alsa
-LIBS += -lm -lasound
+LIBS += -lm -lasound -lmagic
 
 all: $(APP) version.h
 
@@ -26,7 +26,7 @@ include $(DEPEND)
 %.o: %.c
 	$(CC) $(CFLAGS) $(INCS) -o $@ -c $<
 
-sucker: 0main.o rpi.o bee.o cue.o net.o client.o binary.o timer.o packet.o
+sucker: 0main.o rpi.o bee.o cue.o asset.o net.o client.o binary.o timer.o packet.o
 	$(CC) $(CFLAGS) $^ -o $@ $(LIBS)
 
 test: test.o

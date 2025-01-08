@@ -1,5 +1,5 @@
 #开发环境
-$ sudo apt-get install libasound2-dev git xtail vim tig
+$ sudo apt-get install libasound2-dev git xtail vim tig libmagic-dev
 
 $ sudo dpkg-reconfigure locales
 $ sudo timedatectl set-timezone Asia/Shanghai

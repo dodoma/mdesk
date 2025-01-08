@@ -411,6 +411,7 @@ bool dommeStoreDumpFile(DommeStore *plan, char *filename)
     }
 
     mdf_object_2_array(datanode, NULL);
+    //MDF_TRACE_MT(datanode);
 
     mdf_mpack_export_file(datanode, filename);
 
@@ -498,6 +499,18 @@ bool dommeStoreAddTrack(DommeStore *plan, DommeFile *mfile, char *sartist, char 
         remove(filename);
         DommeFileFree(mfile);
         return false;
+    }
+
+    /* sartist, salbum 中不能有 '/'，否则无法保存专辑和艺术家头像 */
+    char *ps = sartist;
+    while (*ps) {
+        if (*ps == '/') *ps = ' ';
+        ps++;
+    }
+    ps = salbum;
+    while (*ps) {
+        if (*ps == '/') *ps = ' ';
+        ps++;
     }
 
     DommeArtist *artist = artistFind(plan->artists, sartist);

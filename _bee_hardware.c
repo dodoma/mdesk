@@ -222,7 +222,7 @@ struct fsentity* _media_info_get(const char *path, struct fsentity *nodes, int *
         if (entry->d_type == DT_REG) {
             snprintf(filename, sizeof(filename), "%s%s", path, entry->d_name);
 
-            if (mediaType(filename) == MEDIA_UNKNOWN) continue;
+            if (assetType(filename) == ASSET_UNKNOWN) continue;
         } else if (entry->d_type != DT_DIR) continue;
 
         /* 剩下的都是有用的 */
@@ -232,7 +232,7 @@ struct fsentity* _media_info_get(const char *path, struct fsentity *nodes, int *
         if (entry->d_type == DT_DIR) item->type = 0;
         else if (entry->d_type == DT_REG) {
             item->type = 1;
-            tracknum++;
+            if (mediaType(filename) != MEDIA_UNKNOWN) tracknum++;
         }
 
         item->next = nodes;

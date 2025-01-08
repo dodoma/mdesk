@@ -16,6 +16,80 @@ typedef struct {
     drflac_int32 psamples[FLAC_DECODE_BUFLEN];
 } MediaEntryFlac;
 
+static uint8_t* _read_file(char *filename, size_t *imagelen)
+{
+    struct stat fs;
+    if (stat(filename, &fs) != 0) return NULL;
+
+    FILE *fp = fopen(filename, "r");
+    if (fp) {
+        uint8_t *imagebuf = mos_calloc(1, fs.st_size);
+        if (fread(imagebuf, 1, fs.st_size, fp) == fs.st_size) {
+            fclose(fp);
+
+            if (imagelen) *imagelen = fs.st_size;
+            return imagebuf;
+        } else free(imagebuf);
+
+        fclose(fp);
+    }
+
+    return NULL;
+}
+
+static uint8_t* _scan_me(char *pathname, size_t *imagelen)
+{
+    bool foundimage = false;
+    char filename[PATH_MAX] = {0};
+
+    DIR *dir = opendir(pathname);
+    if (!dir) return NULL;
+
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        struct stat fs;
+        snprintf(filename, sizeof(filename), "%s%s", pathname, entry->d_name);
+        if (stat(filename, &fs) == -1) continue;
+
+        if (S_ISREG(fs.st_mode)) {
+            if (assetType(filename) == ASSET_IMAGE) {
+                foundimage = true;
+                if (!strncasecmp(entry->d_name, "front", 5) ||
+                    !strncasecmp(entry->d_name, "cd", 2) ||
+                    !strncasecmp(entry->d_name, "folder", 6)) break;
+            }
+        }
+    }
+
+    closedir(dir);
+
+    if (foundimage) return _read_file(filename, imagelen);
+    else return NULL;
+}
+
+static uint8_t* _scan_cover(char *pathname, size_t *imagelen)
+{
+    char subdir[PATH_MAX];
+
+    uint8_t *imagebuf = NULL;
+    struct dirent **deps = NULL;
+
+    int n = scandir(pathname, &deps, _scan_directory, alphasort);
+    for (int i = 0; i < n; i++) {
+        if (!strcasecmp(deps[i]->d_name, "covers") ||
+            !strcasecmp(deps[i]->d_name, "cover") ||
+            !strcasecmp(deps[i]->d_name, "artwork")) {
+            snprintf(subdir, sizeof(subdir), "%s%s/", pathname, deps[i]->d_name);
+            imagebuf = _scan_me(subdir, imagelen);
+            if (imagebuf) return imagebuf;
+
+            free(deps[i]);
+        }
+    }
+
+    return _scan_me(pathname, imagelen);
+}
+
 static void _on_meta(void *data, drflac_metadata *meta)
 {
     MediaNodeFlac *mnode = (MediaNodeFlac*)data;
@@ -122,7 +196,21 @@ static uint8_t* _flac_get_cover(MediaNode *mnode, size_t *imagelen)
 
     if (!flacnode) return NULL;
 
-    if (imagelen) *imagelen = flacnode->imagelen;
+    if (!flacnode->imagebuf) {
+        /* flac 文件 meta 信息里没有封面，尝试在当前目录及 Cover、Covers、Artwork 目录下读取 */
+        char *dumpname = strdup(mnode->filename);
+        char *pathname = dirname(dumpname);
+        int dirlen = strlen(pathname);
+        if (pathname[dirlen-1] != '/') {
+            pathname[dirlen] = '/';
+            dirlen++;
+            pathname[dirlen] = '\0';
+        }
+
+        flacnode->imagebuf = _scan_cover(pathname, imagelen);
+
+        free(dumpname);
+    } else if (imagelen) *imagelen = flacnode->imagelen;
 
     return flacnode->imagebuf;
 }

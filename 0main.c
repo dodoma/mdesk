@@ -6,6 +6,7 @@
 #include "binary.h"
 #include "timer.h"
 #include "bee.h"
+#include "asset.h"
 
 #define NAME_FIFO "/tmp/avm_pipe"
 #define DEFAULT_CONFIGFILE "/home/pi/mdesk/config.json"
@@ -103,6 +104,7 @@ int main(int argc, char *argv[])
     RETURN_V_NOK(err, 1);
 
     beeStop();
+    assetClose();
 
     mdf_destroy(&g_config);
     mdf_destroy(&g_runtime);

@@ -159,9 +159,11 @@ static TechInfo* _mp3_get_tinfo(MediaNode *mnode)
 
     MediaNodeMp3 *mp3node = (MediaNodeMp3*)mnode;
 
-    mp3dec_iterate_buf(mp3node->file.buffer, mp3node->file.size, _iterate_info, &mnode->tinfo);
-    mnode->tinfo.length = (int)(mnode->tinfo.samples / mnode->tinfo.hz) + 1;
-    mnode->ainfo.length = mnode->tinfo.length;
+    if (mnode->tinfo.samples == 0) {
+        mp3dec_iterate_buf(mp3node->file.buffer, mp3node->file.size, _iterate_info, &mnode->tinfo);
+        mnode->tinfo.length = (int)(mnode->tinfo.samples / mnode->tinfo.hz) + 1;
+        mnode->ainfo.length = mnode->tinfo.length;
+    }
 
     return &mnode->tinfo;
 }
@@ -172,10 +174,18 @@ static ArtInfo* _mp3_get_ainfo(MediaNode *mnode)
 
     MediaNodeMp3 *mp3node = (MediaNodeMp3*)mnode;
 
-    if (mp3_id3_get_buf(mp3node->file.buffer, mp3node->file.size,
-                        mnode->ainfo.title, mnode->ainfo.artist, mnode->ainfo.album,
-                        mnode->ainfo.year, mnode->ainfo.track) != true) {
-        return NULL;
+    if (mnode->tinfo.samples == 0) {
+        mp3dec_iterate_buf(mp3node->file.buffer, mp3node->file.size, _iterate_info, &mnode->tinfo);
+        mnode->tinfo.length = (int)(mnode->tinfo.samples / mnode->tinfo.hz) + 1;
+        mnode->ainfo.length = mnode->tinfo.length;
+    }
+
+    if (!mnode->ainfo.title[0]) {
+        if (mp3_id3_get_buf(mp3node->file.buffer, mp3node->file.size,
+                            mnode->ainfo.title, mnode->ainfo.artist, mnode->ainfo.album,
+                            mnode->ainfo.year, mnode->ainfo.track) != true) {
+            return NULL;
+        }
     }
 
     return &mnode->ainfo;
