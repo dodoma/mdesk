@@ -11,7 +11,7 @@ INCS = $(INCBASE) -I ./deps/minimp3/ -I ./deps/dr_libs/
 LIBS = $(LIBBASE)
 
 INCS += -I/usr/include/alsa
-LIBS += -lm -lasound -lmagic
+LIBS += -lm -lasound -lmagic -luchardet
 
 all: $(APP) version.h
 

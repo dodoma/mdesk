@@ -22,6 +22,7 @@ typedef struct {
 
     MLIST *tracks;
 
+    const char *charset;
     uint8_t *_trackbuf;    /* 用来生成曲目MD5（内部使用） */
     size_t _buflen;
 } CueSheet;

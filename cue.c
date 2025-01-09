@@ -1,5 +1,7 @@
 #include <reef.h>
 #include <libgen.h>
+#include <iconv.h>
+#include <uchardet/uchardet.h>
 
 #include "net.h"
 #include "bee.h"
@@ -41,6 +43,27 @@ struct metaToken {
     void (*process)(char *content, CueSheet *centry);
 };
 
+static int _doconv(char *inbuf, size_t inlen, const char *encode, char *outbuf, size_t outlen)
+{
+    iconv_t cd;
+
+    if ((cd = iconv_open("UTF-8", encode)) == (iconv_t)-1) {
+        mtc_mt_err("iconv_open failure %s", strerror(errno));
+        return -1;
+    }
+
+    if (iconv(cd, &inbuf, &inlen, &outbuf, &outlen) != -1) {
+        iconv_close(cd);
+        return 0;
+    } else {
+        mtc_mt_warn("iconv failure %s", strerror(errno));
+
+        memcpy(outbuf, inbuf, outlen > inlen ? inlen : outlen);
+        iconv_close(cd);
+        return -1;
+    }
+}
+
 static void _on_rem(char *content, CueSheet *centry)
 {
     char *buf = content;
@@ -63,15 +86,27 @@ static void _on_title(char *content, CueSheet *centry)
 
     CueTrack *track = mlist_getx(centry->tracks, -1);
 
-    if (track) strncpy(track->title, content, sizeof(track->title) - 1);
-    else strncpy(centry->album, content, sizeof(centry->album) - 1);
+    if (track) {
+        if (strcmp(centry->charset, "ASCII") && strcmp(centry->charset, "UTF-8"))
+            _doconv(content, strlen(content), centry->charset,
+                    track->title, sizeof(track->title) - 1);
+        else strncpy(track->title, content, sizeof(track->title) - 1);
+    } else {
+        if (strcmp(centry->charset, "ASCII") && strcmp(centry->charset, "UTF-8"))
+            _doconv(content, strlen(content), centry->charset,
+                    centry->album, sizeof(centry->album) - 1);
+        else strncpy(centry->album, content, sizeof(centry->album) - 1);
+    }
 }
 
 static void _on_performer(char *content, CueSheet *centry)
 {
     TAKEOFF_WRAP(content, "");
 
-    strncpy(centry->artist, content, sizeof(centry->artist) - 1);
+    if (strcmp(centry->charset, "ASCII") && strcmp(centry->charset, "UTF-8"))
+        _doconv(content, strlen(content), centry->charset,
+                centry->artist, sizeof(centry->artist) - 1);
+    else strncpy(centry->artist, content, sizeof(centry->artist) - 1);
 }
 
 static void _on_file(char *content, CueSheet *centry)
@@ -89,8 +124,14 @@ static void _on_file(char *content, CueSheet *centry)
         dirlen++;
     }
 
-    strncpy(centry->filename, content, sizeof(centry->filename));
-    strncpy(centry->fullname + dirlen, content, sizeof(centry->fullname) - dirlen - 1);
+    if (strcmp(centry->charset, "ASCII") && strcmp(centry->charset, "UTF-8")) {
+        _doconv(content, strlen(content), centry->charset,
+                centry->filename, sizeof(centry->filename) - 1);
+        strncpy(centry->fullname + dirlen, centry->filename, sizeof(centry->fullname) - dirlen - 1);
+    } else {
+        strncpy(centry->filename, content, sizeof(centry->filename) - 1);
+        strncpy(centry->fullname + dirlen, content, sizeof(centry->fullname) - dirlen - 1);
+    }
 }
 
 static void _on_track(char *content, CueSheet *centry)
@@ -196,6 +237,21 @@ CueSheet* cueOpen(const char *filename)
         mlist_init(&centry->tracks, free);
         strncpy(centry->fullname, filename, sizeof(centry->fullname) - 1);
         dirname(centry->fullname);
+        centry->charset = "ASCII";
+
+        uchardet_t ud = uchardet_new();
+        if (ud) {
+            size_t len = fread(buffer, 1, fs.st_size, fp);
+            if (len == fs.st_size) {
+                uchardet_handle_data(ud, buffer, len);
+                uchardet_data_end(ud);
+                centry->charset = uchardet_get_charset(ud);
+            }
+        }
+        mtc_mt_dbg("%s charset: %s", filename, centry->charset);
+
+        fseek(fp, 0, SEEK_SET);
+        memset(buffer, 0x0, fs.st_size);
 
         centry->_trackbuf = mos_calloc(1, strlen(filename) + fs.st_size + 6);
         memcpy(centry->_trackbuf, filename, strlen(filename));
@@ -222,6 +278,8 @@ CueSheet* cueOpen(const char *filename)
         }
 
         fclose(fp);
+        if (ud) uchardet_delete(ud);
+        ud = NULL;
 
         /* 给本大王打上标记，不要重复骚扰我 */
         uint8_t checksum[16] = {0};
