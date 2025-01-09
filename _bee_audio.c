@@ -23,10 +23,12 @@ static int _scan_directory(const struct dirent *ent);
 
 #include "_media_mp3.c"
 #include "_media_flac.c"
+#include "_media_wav.c"
 
 MediaEntry *media_plugins[] = {
     &media_mp3.base,
     &media_flac.base,
+    &media_wav.base,
     NULL
 };
 
@@ -473,12 +475,14 @@ static bool _play_raw(AudioEntry *me, char *filename, DommeFile *mfile)
     MediaNode *mnode = mediaOpen(filename);
     if (!mnode) {
         mtc_mt_err("can't open media file %s", filename);
+        me->act == ACT_NONE;
         return false;
     }
 
     TechInfo *tinfo = mnode->driver->tech_info_get(mnode);
     if (!tinfo) {
         mtc_mt_err("can't get tech info %s", filename);
+        me->act == ACT_NONE;
         return false;
     }
 

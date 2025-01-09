@@ -207,10 +207,12 @@ static uint8_t* _flac_get_cover(MediaNode *mnode, size_t *imagelen)
             pathname[dirlen] = '\0';
         }
 
-        flacnode->imagebuf = _scan_cover(pathname, imagelen);
+        flacnode->imagebuf = _scan_cover(pathname, &flacnode->imagelen);
 
         free(dumpname);
-    } else if (imagelen) *imagelen = flacnode->imagelen;
+    }
+
+    if (imagelen) *imagelen = flacnode->imagelen;
 
     return flacnode->imagebuf;
 }
