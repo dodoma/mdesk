@@ -40,7 +40,7 @@ static uint8_t* _read_file(char *filename, size_t *imagelen)
 static uint8_t* _scan_me(char *pathname, size_t *imagelen)
 {
     bool foundimage = false;
-    char filename[PATH_MAX] = {0};
+    char filename[PATH_MAX] = {0}, imagefile[PATH_MAX] = {0};
 
     DIR *dir = opendir(pathname);
     if (!dir) return NULL;
@@ -53,6 +53,7 @@ static uint8_t* _scan_me(char *pathname, size_t *imagelen)
 
         if (S_ISREG(fs.st_mode)) {
             if (assetType(filename) == ASSET_IMAGE) {
+                snprintf(imagefile, sizeof(imagefile), "%s%s", pathname, entry->d_name);
                 foundimage = true;
                 if (!strncasecmp(entry->d_name, "front", 5) ||
                     !strncasecmp(entry->d_name, "cd", 2) ||
@@ -63,7 +64,7 @@ static uint8_t* _scan_me(char *pathname, size_t *imagelen)
 
     closedir(dir);
 
-    if (foundimage) return _read_file(filename, imagelen);
+    if (foundimage) return _read_file(imagefile, imagelen);
     else return NULL;
 }
 

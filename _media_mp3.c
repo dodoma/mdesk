@@ -9,6 +9,8 @@ typedef struct {
     MediaNode base;
     mp3dec_t mp3d;
     mp3dec_map_info_t file;     /* buffer, size */
+    uint8_t *imagebuf;
+    size_t imagelen;
 } MediaNodeMp3;
 
 typedef struct {
@@ -140,6 +142,8 @@ static MediaNode* _mp3_open(const char *filename)
     mp3dec_init(&mnode->mp3d);
     mnode->file.buffer = NULL;
     mnode->file.size = 0;
+    mnode->imagebuf = NULL;
+    mnode->imagelen = 0;
 
     if (mp3dec_open_file(filename, &mnode->file) == 0) {
         if (mp3dec_detect_buf(mnode->file.buffer, mnode->file.size) == 0) {
@@ -200,7 +204,24 @@ static uint8_t* _mp3_get_cover(MediaNode *mnode, size_t *imagelen)
 
     if (_seek_cover(mp3node->file.buffer, mp3node->file.size, NULL, &imagebuf, imagelen))
         return imagebuf;
-    else return NULL;
+    else if (!mp3node->imagebuf) {
+        char *dumpname = strdup(mnode->filename);
+        char *pathname = dirname(dumpname);
+        int dirlen = strlen(pathname);
+        if (pathname[dirlen-1] != '/') {
+            pathname[dirlen] = '/';
+            dirlen++;
+            pathname[dirlen] = '\0';
+        }
+
+        mp3node->imagebuf = _scan_cover(pathname, &mp3node->imagelen);
+
+        free(dumpname);
+    }
+
+    if (imagelen) *imagelen = mp3node->imagelen;
+
+    return mp3node->imagebuf;
 }
 
 static bool _mp3_play(MediaNode *mnode, AudioEntry *audio)
@@ -231,6 +252,7 @@ static void _mp3_close(MediaNode *mnode)
 
     MediaNodeMp3 *mp3node = (MediaNodeMp3*)mnode;
 
+    mos_free(mp3node->imagebuf);
     mp3dec_close_file(&mp3node->file);
     mos_free(mp3node);
 }
