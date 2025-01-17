@@ -165,6 +165,7 @@ static TechInfo* _mp3_get_tinfo(MediaNode *mnode)
 
     if (mnode->tinfo.samples == 0) {
         mp3dec_iterate_buf(mp3node->file.buffer, mp3node->file.size, _iterate_info, &mnode->tinfo);
+        if (mnode->tinfo.hz <= 0) mnode->tinfo.hz = 44110;
         mnode->tinfo.length = (int)(mnode->tinfo.samples / mnode->tinfo.hz) + 1;
         mnode->ainfo.length = mnode->tinfo.length;
     }
@@ -180,6 +181,7 @@ static ArtInfo* _mp3_get_ainfo(MediaNode *mnode)
 
     if (mnode->tinfo.samples == 0) {
         mp3dec_iterate_buf(mp3node->file.buffer, mp3node->file.size, _iterate_info, &mnode->tinfo);
+        if (mnode->tinfo.hz <= 0) mnode->tinfo.hz = 44110;
         mnode->tinfo.length = (int)(mnode->tinfo.samples / mnode->tinfo.hz) + 1;
         mnode->ainfo.length = mnode->tinfo.length;
     }

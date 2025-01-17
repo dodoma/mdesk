@@ -40,9 +40,9 @@ static MediaNode* _wav_open(const char *filename)
         uint8_t bps = mnode->wav.bitsPerSample;
         mnode->base.tinfo.samples = mnode->wav.totalPCMFrameCount;
         mnode->base.tinfo.channels = mnode->wav.channels;
-        mnode->base.tinfo.hz = mnode->wav.sampleRate;
+        mnode->base.tinfo.hz = mnode->wav.sampleRate > 0 ? mnode->wav.sampleRate : 44100;
         mnode->base.tinfo.kbps = bps * mnode->wav.channels * mnode->wav.sampleRate / 1000;
-        mnode->base.tinfo.length = (int)(mnode->wav.totalPCMFrameCount / mnode->wav.sampleRate) + 1;
+        mnode->base.tinfo.length = (int)(mnode->wav.totalPCMFrameCount / mnode->base.tinfo.hz) + 1;
         mnode->base.ainfo.length = mnode->base.tinfo.length;
 
         return (MediaNode*)mnode;

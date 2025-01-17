@@ -162,10 +162,15 @@ static MediaNode* _flac_open(const char *filename)
         uint8_t bps = pflac->bitsPerSample;
         mnode->base.tinfo.samples = pflac->totalPCMFrameCount;
         mnode->base.tinfo.channels = pflac->channels;
-        mnode->base.tinfo.hz = pflac->sampleRate;
+        mnode->base.tinfo.hz = pflac->sampleRate > 0 ? pflac->sampleRate : 44100;
         mnode->base.tinfo.kbps = bps * pflac->channels * pflac->sampleRate / 1000;
-        mnode->base.tinfo.length = (int)(pflac->totalPCMFrameCount / pflac->sampleRate) + 1;
+        mnode->base.tinfo.length = (int)(pflac->totalPCMFrameCount / mnode->base.tinfo.hz) + 1;
         mnode->base.ainfo.length = mnode->base.tinfo.length;
+
+        if (!memcmp(mnode->base.md5, "0000000000", 10)) {
+            /* 通过 meta信息中 streaminfo 获取id失败，自己生成 */
+            mhash_file_md5_s(filename, mnode->base.md5);
+        }
 
         return (MediaNode*)mnode;
     } else {
