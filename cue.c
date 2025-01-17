@@ -248,7 +248,6 @@ CueSheet* cueOpen(const char *filename)
                 centry->charset = uchardet_get_charset(ud);
             }
         }
-        mtc_mt_dbg("%s charset: %s", filename, centry->charset);
 
         fseek(fp, 0, SEEK_SET);
         memset(buffer, 0x0, fs.st_size);

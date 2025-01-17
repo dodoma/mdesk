@@ -14,11 +14,14 @@ static int _scan_directory(const struct dirent *ent)
 
 static int _scan_music(const struct dirent *ent)
 {
-    if (ent->d_type == DT_REG && strcmp(ent->d_name, "music.db")) return 1;
+    if (ent->d_type == DT_REG &&
+        strcmp(ent->d_name, "music.db") &&
+        strcmp(ent->d_name, "notMusic.cache")) return 1;
     else return 0;
 }
 
-static void _scan_for_files(DommeStore *plan, const char *subdir, MLIST *filesok, MLIST *filesnew)
+static void _scan_for_files(DommeStore *plan, const char *subdir,
+                            MLIST *filesok, MLIST *filesnew, MLIST *filesNotMedia)
 {
     struct dirent **deps = NULL, **feps = NULL;
 
@@ -33,8 +36,29 @@ static void _scan_for_files(DommeStore *plan, const char *subdir, MLIST *filesok
     for (int i = 0; i < n; i++) {
         char filename[PATH_MAX], *ptr = filename;
         snprintf(filename, sizeof(filename), "%s%s%s", plan->basedir, subdir, feps[i]->d_name);
-        if (!mlist_search(filesok, &ptr, _strcompare)) mlist_append(filesnew, strdup(filename));
+        if (!mlist_search(filesok, &ptr, _strcompare) &&
+            !mlist_search(filesNotMedia, &ptr, _strcompare)) {
+            ASSET_TYPE ftype = assetType(filename);
+            if (ftype == ASSET_AUDIO) {
+                MediaNode *mnode = mediaOpen(filename);
+                if (mnode) {
+                    mnode->driver->close(mnode);
+                    mlist_append(filesnew, strdup(filename));
+                    goto nextfile;
+                }
+            } else if (ftype == ASSET_CUE) {
+                CueSheet *centry = cueOpen(filename);
+                if (centry) {
+                    cueFree(centry);
+                    mlist_append(filesnew, strdup(filename));
+                    goto nextfile;
+                }
+            }
 
+            mlist_append(filesNotMedia, strdup(filename));
+        }
+
+    nextfile:
         free(feps[i]);
     }
     mos_free(feps);
@@ -44,7 +68,7 @@ static void _scan_for_files(DommeStore *plan, const char *subdir, MLIST *filesok
         char dirname[PATH_MAX];
         snprintf(dirname, sizeof(dirname), "%s%s/", subdir, deps[i]->d_name);
 
-        _scan_for_files(plan, dirname, filesok, filesnew);
+        _scan_for_files(plan, dirname, filesok, filesnew, filesNotMedia);
 
         free(deps[i]);
     }
@@ -387,7 +411,7 @@ static void* _index_music(void *arg)
 bool indexerScan(DommeStore *plan, bool fresh, AudioEntry *me)
 {
     char filename[PATH_MAX];
-    MLIST *filesa, *filesb, *filesc;
+    MLIST *filesa, *filesb, *filesc, *filesd;
     DommeFile *mfile;
     char *key;
     bool ret = fresh; /* 对于新建索引，返回 true */
@@ -397,6 +421,7 @@ bool indexerScan(DommeStore *plan, bool fresh, AudioEntry *me)
     mlist_init(&filesa, free);  /* 保存数据库中原有文件列表 */
     mlist_init(&filesb, free);  /* 保存数据库中没有，媒体库中有的文件列表 （新增） */
     mlist_init(&filesc, free);  /* 保存数据库中有，媒体库中没有的文件列表 （删除） */
+    filesd = NULL;              /* 保存数据库中没有，媒体库中有的非媒体文件列表 （用于加速启动） */
 
     /*
      * 1. 已索引文件名保存至列表 filesa
@@ -408,12 +433,24 @@ bool indexerScan(DommeStore *plan, bool fresh, AudioEntry *me)
 
             if (access(filename, F_OK) != 0) mlist_append(filesc, strdup(filename));
         }
+
+        /* 1.1 读取非媒体文件 */
+        snprintf(filename, sizeof(filename), "%snotMusic.cache", plan->basedir);
+        filesd = mlist_build_from_textfile(filename, PATH_MAX);
+        if (!filesd) mlist_init(&filesd, free);
     }
+
+    int nonmediaCount = mlist_length(filesd);
 
     /*
      * 2. 找出所有待检测文件保存至列表 filesb, 同时把所有目录更新至 plan->dirs，方便后续使用
      */
-    _scan_for_files(plan, "", filesa, filesb);
+    _scan_for_files(plan, "", filesa, filesb, filesd);
+
+    if (mlist_length(filesd) > nonmediaCount) {
+        snprintf(filename, sizeof(filename), "%snotMusic.cache", plan->basedir);
+        mlist_write_textfile(filesd, filename);
+    }
 
     if (mlist_length(filesb) > 0) {
         mtc_mt_dbg("got %d files to index", mlist_length(filesb));
@@ -482,6 +519,7 @@ bool indexerScan(DommeStore *plan, bool fresh, AudioEntry *me)
     mlist_destroy(&filesa);
     mlist_destroy(&filesb);
     mlist_destroy(&filesc);
+    mlist_destroy(&filesd);
 
     return ret;
 }
@@ -502,7 +540,7 @@ void indexerScanSubdirectory(DommeStore *plan, const char *subpath)
 
     mlist_init(&files, free);
 
-    _scan_for_files(plan, subpath, NULL, files);
+    _scan_for_files(plan, subpath, NULL, files, NULL);
 
     if (mlist_length(files) > 0) {
         mtc_mt_dbg("got %d files to index", mlist_length(files));
