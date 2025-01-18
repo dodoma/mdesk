@@ -127,6 +127,20 @@ static bool _in_playlist(MLIST *playlist, char *id)
     return false;
 }
 
+uint32_t albumFreeTrack(DommeAlbum *disk)
+{
+    if (!disk) return 0;
+
+    uint32_t count = 0;
+
+    DommeFile *mfile;
+    MLIST_ITERATE(disk->tracks, mfile) {
+        if (!mfile->touched) count++;
+    }
+
+    return count;
+}
+
 uint32_t albumFreeReset(DommeAlbum *disk)
 {
     if (!disk) return 0;
@@ -138,6 +152,20 @@ uint32_t albumFreeReset(DommeAlbum *disk)
     disk->pos = 0;
 
     return mlist_length(disk->tracks);
+}
+
+uint32_t artistFreeTrack(DommeArtist *artist)
+{
+    if (!artist) return 0;
+
+    uint32_t count = 0;
+
+    DommeAlbum *disk;
+    MLIST_ITERATE(artist->albums, disk) {
+        count += albumFreeTrack(disk);
+    }
+
+    return count;
 }
 
 uint32_t artistFreeReset(DommeArtist *artist)
@@ -270,14 +298,39 @@ char* _told_todo(AudioEntry *me)
     } else {
         /* 指明媒体库 */
         dommeFreeReset(me->plan);
-        me->plan->pos = 0;
-        if (me->shuffle) me->plan->pos = mos_rand(me->plan->count_track);
-
-        DommeFile *mfile = dommeGetPos(me->plan, me->plan->pos);
-        if (mfile) {
-            mfile->touched = true;
-            me->plan->count_touched = 1;
-            return mfile->id;
+        if (me->shuffle) {
+            /* 随机艺术家比随机曲目更科学 */
+            me->plan->pos = mos_rand(mlist_length(me->plan->artists));
+            DommeArtist *artist = mlist_getx(me->plan->artists, me->plan->pos);
+            if (artist) {
+                artist->pos = mos_rand(mlist_length(artist->albums));
+                DommeAlbum *disk = mlist_getx(artist->albums, artist->pos);
+                if (disk) {
+                    disk->pos = mos_rand(mlist_length(disk->tracks));
+                    DommeFile *mfile = mlist_getx(disk->tracks, disk->pos);
+                    if (mfile) {
+                        me->plan->count_touched = 1;
+                        mfile->touched = true;
+                        return mfile->id;
+                    }
+                }
+            }
+        } else {
+            me->plan->pos = 0;
+            DommeArtist *artist = mlist_getx(me->plan->artists, me->plan->pos);
+            if (artist) {
+                artist->pos = 0;
+                DommeAlbum *disk = mlist_getx(artist->albums, artist->pos);
+                if (disk) {
+                    disk->pos = 0;
+                    DommeFile *mfile = mlist_getx(disk->tracks, disk->pos);
+                    if (mfile) {
+                        me->plan->count_touched = 1;
+                        mfile->touched = true;
+                        return mfile->id;
+                    }
+                }
+            }
         }
 
         mtc_mt_warn("no track to play %s", me->plan->name);
@@ -435,26 +488,48 @@ char* _next_todo(AudioEntry *me)
         }
 
         if (me->shuffle) {
-            char *key;
-            int32_t pos = mos_rand(plan->count_track - plan->count_touched);
-            MHASH_ITERATE(plan->mfiles, key, mfile) {
-                if (!mfile->touched) {
-                    if (pos == 0) {
+            /* 随机播放 */
+        rerand:
+            plan->pos = mos_rand(mlist_length(plan->artists));
+            artist = mlist_getx(plan->artists, plan->pos);
+            int freeCount = artistFreeTrack(artist);
+            if (freeCount > 0) {
+                int pos = mos_rand(freeCount);
+                MLIST_ITERATE(artist->albums, disk) {
+                    MLIST_ITERATEB(disk->tracks, mfile) {
+                        if (!mfile->touched) {
+                            if (pos == 0) {
+                                mfile->touched = true;
+                                plan->count_touched++;
+                                return mfile->id;
+                            }
+                            pos--;
+                        }
+                    }
+                }
+            } else goto rerand;
+        } else {
+            /* 顺序播放 */
+        nextartist:
+            artist = mlist_getx(plan->artists, plan->pos);
+            if (artistFreeTrack(artist) > 0) {
+            nextdisk:
+                disk = mlist_getx(artist->albums, artist->pos);
+                if (albumFreeTrack(disk) > 0) {
+                    disk->pos++;
+                    mfile = mlist_getx(disk->tracks, disk->pos);
+                    if (mfile) {
                         mfile->touched = true;
                         plan->count_touched++;
                         return mfile->id;
                     }
-                    pos--;
+                } else if (artist->pos < mlist_length(artist->albums) - 1) {
+                    artist->pos++;
+                    goto nextdisk;
                 }
-            }
-        } else {
-            /* 顺序播放 */
-            plan->pos++;
-            mfile = dommeGetPos(plan, plan->pos);
-            if (mfile) {
-                mfile->touched = true;
-                plan->count_touched++;
-                return mfile->id;
+            } else if (plan->pos < mlist_length(plan->artists) - 1) {
+                plan->pos++;
+                goto nextartist;
             }
         }
 

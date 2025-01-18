@@ -71,7 +71,7 @@ typedef struct {
     uint32_t count_album;
     uint32_t count_track;
     uint32_t count_touched;
-    uint32_t pos;               /* 当前播放曲目 */
+    uint32_t pos;               /* 当前播放艺术家 */
 } DommeStore;
 
 /*
