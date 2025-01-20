@@ -304,11 +304,11 @@ CueSheet* cueOpen(const char *filename)
                 /* 从文件名中取艺术家名 */
                 char *pe = strstr(centry->filename, " - ");
                 if (!pe) pe = strchr(centry->filename, ' ');
-                if (!pe) strncpy(centry->artist, centry->filename, sizeof(centry->artist) - 1);
+                if (!pe) memcpy(centry->artist, centry->filename, sizeof(centry->artist) - 1);
                 else {
                     int toklen = sizeof(centry->artist) - 1;
                     if (toklen > pe - centry->filename) toklen = pe - centry->filename;
-                    strncpy(centry->artist, centry->filename, toklen);
+                    memcpy(centry->artist, centry->filename, toklen);
                 }
             }
 
@@ -325,7 +325,7 @@ CueSheet* cueOpen(const char *filename)
                     int toklen = sizeof(centry->album) - 1;
                     if (toklen > strlen(pe)) toklen = strlen(pe);
                     strncpy(centry->album, pe, toklen);
-                } else strncpy(centry->album, centry->filename, sizeof(centry->album) - 1);
+                } else memcpy(centry->album, centry->filename, sizeof(centry->album) - 1);
             }
 
             if (pointindex > 0) centry->filename[pointindex] = '.';

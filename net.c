@@ -166,7 +166,7 @@ static void* el_timer(void *arg)
     int timerfd = *(int*)arg;
 
     fd_set readset;
-    int maxfd, rv;
+    int maxfd = 0, rv;
 
     int loglevel = mtc_level_str2int(mdf_get_value(g_config, "trace.main", "debug"));
     mtc_mt_initf("timer", loglevel, g_log_tostdout ? "-" : "%s/log/timer.log", g_location);

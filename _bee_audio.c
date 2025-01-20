@@ -59,7 +59,7 @@ MediaNode* mediaOpen(const char *filename)
     while (media_plugins[index]) {
         mnode = media_plugins[index]->open(filename);
         if (mnode) {
-            strncpy(mnode->filename, filename, namelen > PATH_MAX ? PATH_MAX : namelen);
+            memcpy(mnode->filename, filename, namelen > PATH_MAX ? PATH_MAX : namelen);
             mnode->driver = media_plugins[index];
 
             return mnode;

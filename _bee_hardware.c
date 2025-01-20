@@ -159,9 +159,10 @@ static struct ustick* _usb_stick_get(const char *path)
 
             if (_dir_mounted_separary(dirname, path)) {
                 struct ustick *newstick = mos_calloc(1, sizeof(struct ustick));
+                memset(newstick, 0x0, sizeof(struct ustick));
                 int slen = strlen(dirent->d_name);
                 if (slen > sizeof(newstick->name)) slen = sizeof(newstick->name);
-                strncpy(newstick->name, dirent->d_name, slen);
+                memcpy(newstick->name, dirent->d_name, slen);
                 newstick->next = stick;
                 stick = newstick;
             }
