@@ -877,22 +877,18 @@ bool audio_process(BeeEntry *be, QueueEntry *qe)
         char *name = mdf_get_value(qe->nodein, "name", NULL);
         char *title = mdf_get_value(qe->nodein, "title", NULL);
 
-        if (id) {
-            /*
-             * TODO memory leak
-             * 此时释放内存，会导致播放线程往 playlist 里面加入历史记录的时候访问已释放内存空间，暂不释放
-             */
-            //mos_free(me->trackid);
-            me->trackid = strdup(id);
-        }
-        if (name) {
-            if (me->artist) free(me->artist);
-            me->artist = strdup(name);
-        }
-        if (title) {
-            if (me->album) free(me->album);
-            me->album = strdup(title);
-        }
+        /*
+         * TODO memory leak
+         * 此时释放内存，会导致播放线程往 playlist 里面加入历史记录的时候访问已释放内存空间，暂不释放
+         */
+        //mos_free(me->trackid);
+        me->trackid = NULL;
+        mos_free(me->artist);
+        mos_free(me->album);
+
+        if (id) me->trackid = strdup(id);
+        if (name) me->artist = strdup(name);
+        if (title) me->album = strdup(title);
 
         me->act = ACT_PLAY;
     }
