@@ -10,7 +10,7 @@ I offered a [raspberry pi image](https://github.com/dodoma/mdesk) and an [Andori
 
 Burn the image into raspberry pi, Install the app to your phone, and setting the network to use it.
 
-Music Pi support FLAC、MP3、WAV format audio file currently. Before use it, make sure read the [useage](https://avm.mbox.net.cn/readme.html) first.
+Music Pi support FLAC、MP3、WAV format audio file currently. Before use it, make sure read the [FAQ](faq.md) first.
 
 Not like [volumio](https://volumio.com/)，Music PI can cache audio file into your phone, and play it by phone.
 
