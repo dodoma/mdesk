@@ -19,6 +19,9 @@ This is a [use demo1](https://avm.mbox.net.cn/avm-phone.mp4)  [use demo2](https:
 Music PI released under MIT License.
 
 
+#### mdesk - The raspberry pi image of Music PI
+
+
 #### Dependence
 
 mdesk depends on [reef](https://github.com/dodoma/reef), [minimp3](https://github.com/dodoma/minimp3), and [dr_libs](https://github.com/dodoma/dr_libs)
